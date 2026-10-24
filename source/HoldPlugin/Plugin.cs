@@ -317,6 +317,35 @@ public class Plugin
         return false;
     }
 
+    /// <summary>
+    ///     Find a hold annotation (H/XXX or H/XXX/42) in the label data. This does not match the
+    ///     waypoint to the route.
+    /// </summary>
+    static bool TryParseHoldAnnotation(FDP2.FDR fdr, out int? exitTimeMinutes)
+    {
+        exitTimeMinutes = null;
+
+        var parts = fdr.LabelOpData.Split(' ');
+        foreach (var part in parts)
+        {
+            if (!part.StartsWith("H/") && !part.StartsWith("H\\"))
+                continue;
+
+            var segments = part.Split('/', '\\');
+            if (segments.Length < 2)
+                continue;
+
+            if (segments.Length >= 3 && int.TryParse(segments[2], out var minutes))
+            {
+                exitTimeMinutes = minutes;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     bool TryFindHoldSegment(
         FDP2.FDR fdr,
         HoldItem holdItem,
@@ -461,11 +490,14 @@ public class Plugin
             try
             {
                 var existingHold = _activeHolds.FirstOrDefault(h => h.Callsign == fdr.Callsign);
-                var hasHoldText = TryParseHoldPointFromLabelOpData(fdr, out var holdPointPrefix, out var exitTimeMinutes);
 
                 if (existingHold != null)
                 {
-                    if (!hasHoldText)
+                    // Do not match the annotation to the route. The aircraft can pass waypoints
+                    // after the hold point, and the hold must stay while the annotation stays.
+                    var hasHoldAnnotation = TryParseHoldAnnotation(fdr, out var exitTimeMinutes);
+
+                    if (!hasHoldAnnotation)
                     {
                         // H/XXX removed from label data - cancel if we own the FDR
                         if (fdr.IsTrackedByMe)
@@ -489,6 +521,7 @@ public class Plugin
                 }
                 else
                 {
+                    var hasHoldText = TryParseHoldPointFromLabelOpData(fdr, out var holdPointPrefix, out var exitTimeMinutes);
                     if (hasHoldText && GetHoldItemState(fdr) != HoldItemState.Unconcerned)
                     {
                         InitiateHold(fdr, holdPointPrefix, exitTimeMinutes);
