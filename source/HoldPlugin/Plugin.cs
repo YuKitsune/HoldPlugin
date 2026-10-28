@@ -245,9 +245,13 @@ public class Plugin
         });
     }
 
-    bool TryParseHoldPointFromLabelOpData(FDP2.FDR fdr, out string holdPointName, out int? exitTimeMinutes)
+    /// <summary>
+    ///     Find a hold annotation (H/XXX or H/XXX/42) in the label data. This does not match the
+    ///     waypoint to the route.
+    /// </summary>
+    static bool TryParseHoldAnnotation(FDP2.FDR fdr, out string holdPointPrefix, out int? exitTimeMinutes)
     {
-        holdPointName = string.Empty;
+        holdPointPrefix = string.Empty;
         exitTimeMinutes = null;
 
         var parts = fdr.LabelOpData.Split(' ');
@@ -263,77 +267,7 @@ public class Plugin
             if (segments.Length < 2)
                 continue;
 
-            var partialPointName = segments[1];
-
-            // Parse exit time if present (3rd segment)
-            if (segments.Length >= 3 && int.TryParse(segments[2], out var minutes))
-            {
-                exitTimeMinutes = minutes;
-            }
-
-            // Try matching to a point on the route
-
-            var waypoints = fdr.ParsedRoute
-                .Skip(fdr.ParsedRoute.OverflownIndex)
-                .Where(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT)
-                .ToArray();
-
-            // Search for exact matches first
-            var matchingSegment = waypoints.FirstOrDefault(s => s.Intersection.Name == partialPointName);
-
-            // No exact match, check for matches against the first 3 chars
-            if (matchingSegment is null && partialPointName.Length >= 3)
-            {
-                matchingSegment = waypoints.FirstOrDefault(s => s.Intersection.Name.StartsWith(partialPointName));
-            }
-
-            // The hold point may be the most recently overflown waypoint when the aircraft has just
-            // entered the hold. Check for this before concluding the hold text is invalid.
-            if (matchingSegment is null && fdr.ParsedRoute.OverflownIndex > 0)
-            {
-                var lastOverflownIdx = fdr.ParsedRoute
-                    .GetRange(0, fdr.ParsedRoute.OverflownIndex + 1)
-                    .FindLastIndex(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT);
-                if (lastOverflownIdx >= 0)
-                {
-                    var lastOverflown = fdr.ParsedRoute[lastOverflownIdx];
-                    if (lastOverflown.Intersection.Name == partialPointName ||
-                        (partialPointName.Length >= 3 && lastOverflown.Intersection.Name.StartsWith(partialPointName)))
-                    {
-                        matchingSegment = lastOverflown;
-                    }
-                }
-            }
-
-            if (matchingSegment is null)
-            {
-                continue;
-            }
-
-            holdPointName = matchingSegment.Intersection.Name;
-            return true;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    ///     Find a hold annotation (H/XXX or H/XXX/42) in the label data. This does not match the
-    ///     waypoint to the route.
-    /// </summary>
-    static bool TryParseHoldAnnotation(FDP2.FDR fdr, out int? exitTimeMinutes)
-    {
-        exitTimeMinutes = null;
-
-        var parts = fdr.LabelOpData.Split(' ');
-        foreach (var part in parts)
-        {
-            if (!part.StartsWith("H/") && !part.StartsWith("H\\"))
-                continue;
-
-            var segments = part.Split('/', '\\');
-            if (segments.Length < 2)
-                continue;
+            holdPointPrefix = segments[1];
 
             if (segments.Length >= 3 && int.TryParse(segments[2], out var minutes))
             {
@@ -344,35 +278,6 @@ public class Plugin
         }
 
         return false;
-    }
-
-    bool TryFindHoldSegment(
-        FDP2.FDR fdr,
-        HoldItem holdItem,
-        out FDP2.FDR.ExtractedRoute.Segment? holdSegment)
-    {
-        holdSegment = null;
-
-        holdSegment = fdr.ParsedRoute
-            .Skip(fdr.ParsedRoute.OverflownIndex)
-            .FirstOrDefault(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT && s.Intersection.Name == holdItem.HoldPoint);
-
-        // The hold point may be the most recently overflown waypoint when the aircraft has just
-        // entered the hold.
-        if (holdSegment is null && fdr.ParsedRoute.OverflownIndex > 0)
-        {
-            var lastOverflownIdx = fdr.ParsedRoute
-                .GetRange(0, fdr.ParsedRoute.OverflownIndex + 1)
-                .FindLastIndex(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT);
-            if (lastOverflownIdx >= 0)
-            {
-                var candidate = fdr.ParsedRoute[lastOverflownIdx];
-                if (candidate.Intersection.Name == holdItem.HoldPoint)
-                    holdSegment = candidate;
-            }
-        }
-
-        return holdSegment is not null;
     }
 
     void OnSelectedTrackChanged(object? sender, EventArgs e)
@@ -443,7 +348,7 @@ public class Plugin
             if (GetHoldItemState(fdr) == HoldItemState.Unconcerned)
                 continue;
 
-            if (!TryParseHoldPointFromLabelOpData(fdr, out var holdPointPrefix, out var exitTimeMinutes))
+            if (!TryParseHoldAnnotation(fdr, out var holdPointPrefix, out var exitTimeMinutes))
                 continue;
 
             InitiateHold(fdr, holdPointPrefix, exitTimeMinutes);
@@ -495,7 +400,7 @@ public class Plugin
                 {
                     // Do not match the annotation to the route. The aircraft can pass waypoints
                     // after the hold point, and the hold must stay while the annotation stays.
-                    var hasHoldAnnotation = TryParseHoldAnnotation(fdr, out var exitTimeMinutes);
+                    var hasHoldAnnotation = TryParseHoldAnnotation(fdr, out _, out var exitTimeMinutes);
 
                     if (!hasHoldAnnotation)
                     {
@@ -521,8 +426,8 @@ public class Plugin
                 }
                 else
                 {
-                    var hasHoldText = TryParseHoldPointFromLabelOpData(fdr, out var holdPointPrefix, out var exitTimeMinutes);
-                    if (hasHoldText && GetHoldItemState(fdr) != HoldItemState.Unconcerned)
+                    var hasHoldAnnotation = TryParseHoldAnnotation(fdr, out var holdPointPrefix, out var exitTimeMinutes);
+                    if (hasHoldAnnotation && GetHoldItemState(fdr) != HoldItemState.Unconcerned)
                     {
                         InitiateHold(fdr, holdPointPrefix, exitTimeMinutes);
                     }
@@ -554,36 +459,46 @@ public class Plugin
         CreateHoldItem(fdr, holdSegment, holdExitTime);
     }
 
-    // Find the hold-point waypoint on the route, falling back to the most recently overflown
-    // waypoint when the hold point has already been passed (e.g. aircraft is established in the
-    // hold, or a handoff is accepted after overflight).
+    // Find the hold-point waypoint on the route. Search forward from the current waypoint first.
+    // Then search backward from the current waypoint, because the aircraft can pass the hold
+    // point (e.g. aircraft is established in the hold, or a handoff is accepted after
+    // overflight). The backward search starts at the current waypoint, so that it does not match
+    // a waypoint at the start of the route before a nearer one.
     static FDP2.FDR.ExtractedRoute.Segment? FindHoldWaypoint(FDP2.FDR fdr, string holdPointPrefix)
     {
-        var waypoints = fdr.ParsedRoute
-            .Skip(fdr.ParsedRoute.OverflownIndex)
+        var route = fdr.ParsedRoute.ToList();
+        var currentIndex = Math.Max(fdr.ParsedRoute.OverflownIndex, 0);
+
+        var waypointsAhead = route
+            .Skip(currentIndex)
             .Where(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT)
             .ToArray();
 
+        var match = FindMatchingWaypoint(waypointsAhead, holdPointPrefix);
+        if (match is not null)
+            return match;
+
+        var waypointsBehind = route
+            .Take(currentIndex)
+            .Where(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT)
+            .Reverse()
+            .ToArray();
+
+        return FindMatchingWaypoint(waypointsBehind, holdPointPrefix);
+    }
+
+    // Find the first waypoint with an exact name match. If there is no exact match, find the
+    // first waypoint that starts with the prefix (3 characters or more).
+    static FDP2.FDR.ExtractedRoute.Segment? FindMatchingWaypoint(
+        FDP2.FDR.ExtractedRoute.Segment[] waypoints,
+        string holdPointPrefix)
+    {
         var match = waypoints.FirstOrDefault(s => s.Intersection.Name == holdPointPrefix);
 
         if (match is null && holdPointPrefix.Length >= 3)
             match = waypoints.FirstOrDefault(s => s.Intersection.Name.StartsWith(holdPointPrefix));
 
-        if (match is not null || fdr.ParsedRoute.OverflownIndex <= 0)
-            return match;
-
-        var lastOverflownIdx = fdr.ParsedRoute
-            .GetRange(0, fdr.ParsedRoute.OverflownIndex + 1)
-            .FindLastIndex(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT);
-        if (lastOverflownIdx < 0)
-            return null;
-
-        var lastOverflown = fdr.ParsedRoute[lastOverflownIdx];
-        if (lastOverflown.Intersection.Name == holdPointPrefix ||
-            (holdPointPrefix.Length >= 3 && lastOverflown.Intersection.Name.StartsWith(holdPointPrefix)))
-            return lastOverflown;
-
-        return null;
+        return match;
     }
 
     void UpdateHoldItemFromFDR(FDP2.FDR fdr, HoldItem hold)
@@ -600,7 +515,8 @@ public class Plugin
         // ATO is only populated once the aircraft overflies the hold point, which may happen
         // after the hold item was created. Re-read it so the entry time reflects the actual
         // overflight time once available.
-        if (TryFindHoldSegment(fdr, hold, out var holdSegment) && holdSegment!.ATO != default)
+        var holdSegment = FindHoldWaypoint(fdr, hold.HoldPoint);
+        if (holdSegment is not null && holdSegment.ATO != default)
             hold.HoldEntryTime = holdSegment.ATO;
     }
 
