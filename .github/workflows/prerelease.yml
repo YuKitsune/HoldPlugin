@@ -1,0 +1,38 @@
+name: prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'The branch to build'
+        required: true
+        type: string
+
+jobs:
+  windows-latest:
+    name: windows-latest
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+      - name: 'Cache: .fallout/temp, ~/.nuget/packages'
+        uses: actions/cache@v6
+        with:
+          path: |
+            .fallout/temp
+            ~/.nuget/packages
+          key: ${{ runner.os }}-${{ hashFiles('**/global.json', '**/*.csproj', '**/Directory.Packages.props') }}
+      # The cache can contain zip files from earlier builds. Remove them, so that only the new zip is uploaded.
+      - name: 'Clean: old plugin packages'
+        shell: pwsh
+        run: Remove-Item .fallout/temp/HoldPlugin.*.zip -ErrorAction SilentlyContinue
+      - name: 'Run: Package'
+        run: ./build.cmd Package --configuration Release
+      - name: 'Upload: plugin package'
+        uses: actions/upload-artifact@v4
+        with:
+          name: HoldPlugin-prerelease
+          path: .fallout/temp/HoldPlugin.*.zip
+          if-no-files-found: error
