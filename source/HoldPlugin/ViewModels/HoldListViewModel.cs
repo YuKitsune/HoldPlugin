@@ -53,8 +53,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
         _guiInvoker = guiInvoker;
 
         HoldPointName = pointName;
-        Refresh(items);
-        _guiInvoker.InvokeOnUiThread(_ => Refresh(items));
+        UpdateItems(items);
 
         WeakReferenceMessenger.Default.Register(this);
     }
@@ -64,15 +63,26 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
         _guiInvoker.InvokeOnUiThread(_ => Refresh(Plugin.ActiveHolds));
     }
 
+    // The holds can change between the time the window is requested and the time it is shown.
+    public void OnViewLoaded()
+    {
+        Refresh(Plugin.ActiveHolds);
+    }
+
     void Refresh(IEnumerable<HoldItem> holdItems)
+    {
+        UpdateItems(holdItems);
+
+        if (Items.Count == 0)
+            _windowHandle.Close();
+    }
+
+    void UpdateItems(IEnumerable<HoldItem> holdItems)
     {
         var relevantHoldItems = holdItems
             .Where(ShouldDisplay)
             .OrderByDescending(LowestLevel)
             .ToArray();
-        
-        if (relevantHoldItems.Length == 0)
-            _windowHandle.Close();
 
         var callsigns = Items.Select(x => x.AircraftId).ToList();
         

@@ -29,6 +29,10 @@ public class WindowManager(GuiInvoker guiInvoker)
                 StartPosition = FormStartPosition.CenterParent
             };
 
+            // If the view closes the form before it has a handle, the form is disposed and cannot be shown.
+            if (form.IsDisposed)
+                return;
+
             if (size.HasValue)
             {
                 form.Width = (int)size.Value.Width;
@@ -37,11 +41,10 @@ public class WindowManager(GuiInvoker guiInvoker)
 
             form.PerformLayout();
             form.Closed += (_, _) => RemoveWindow(key);
+            _windows[key] = form;
             form.Show(mainForm);
 
             configureForm?.Invoke(form);
-
-            _windows[key] = form;
         });
     }
 
