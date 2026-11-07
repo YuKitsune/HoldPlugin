@@ -33,6 +33,9 @@ public class Plugin
     IRecipient<RefreshHoldsCommand>
 {
     const string HoldIndicatorStripItemTypePrefix = "HoldPlugin_Indicator_";
+
+    // The hold duration to use when the label data has no exit time.
+    static readonly TimeSpan DefaultHoldDuration = TimeSpan.FromMinutes(10);
     
 #if DEBUG
     public const string Name = "Hold Plugin - Debug";
@@ -80,6 +83,8 @@ public class Plugin
         WeakReferenceMessenger.Default.Register<HoldPointAddedCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldPointRemovedCommand>(this);
         WeakReferenceMessenger.Default.Register<RefreshHoldsCommand>(this);
+
+        HoldPatches.Apply(Name);
 
         MMI.SelectedTrackChanged += OnSelectedTrackChanged;
         FDP2.FDRsChanged += OnFDRsChanged;
@@ -464,7 +469,7 @@ public class Plugin
     // point (e.g. aircraft is established in the hold, or a handoff is accepted after
     // overflight). The backward search starts at the current waypoint, so that it does not match
     // a waypoint at the start of the route before a nearer one.
-    static FDP2.FDR.ExtractedRoute.Segment? FindHoldWaypoint(FDP2.FDR fdr, string holdPointPrefix)
+    internal static FDP2.FDR.ExtractedRoute.Segment? FindHoldWaypoint(FDP2.FDR fdr, string holdPointPrefix)
     {
         var route = fdr.ParsedRoute.ToList();
         var currentIndex = Math.Max(fdr.ParsedRoute.OverflownIndex, 0);
@@ -573,11 +578,15 @@ public class Plugin
 
         var state = GetHoldItemState(fdr);
 
+        // vatSys sets the ETO to DateTime.MaxValue when it has no estimate.
+        var holdPointEto = holdSegment.ETO == DateTime.MaxValue ? DateTime.UtcNow : holdSegment.ETO;
+
         var holdItem = new HoldItem(
             fdr.Callsign,
             holdSegment.Intersection.Name,
             holdSegment.ATO,
             holdExitTime,
+            holdPointEto + DefaultHoldDuration,
             isDesignated,
             level,
             clearedFlightLevel,
@@ -934,6 +943,7 @@ public class Plugin
 
     public void Receive(RefreshHoldsCommand message)
     {
+        HoldPatches.Sync(ActiveHolds);
         EnsureHoldWindowsAreOpen();
     }
 }
