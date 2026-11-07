@@ -67,7 +67,7 @@ public class Plugin
     {
         System.Diagnostics.Debug.WriteLine($"Plugin {Name} created");
         
-        var guiInvoker = new GuiInvoker(MMI.InvokeOnGUI);
+        var guiInvoker = new GuiInvoker(MMI.InvokeOnGUI, AddError);
         _windowManager = new WindowManager(guiInvoker);
         
         WeakReferenceMessenger.Default.Register<DesignateAircraftCommand>(this);
@@ -148,7 +148,7 @@ public class Plugin
                     $"HOLD {holdPointName} WINDOW",
                     handle =>
                     {
-                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, handle, new GuiInvoker(MMI.InvokeOnGUI));
+                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
                         var view = new HoldList(viewModel);
                         return view;
                     },
@@ -170,7 +170,7 @@ public class Plugin
                 "HOLD OTHER WINDOW",
                 handle =>
                 {
-                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, handle, new GuiInvoker(MMI.InvokeOnGUI));
+                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
                     var view = new HoldList(viewModel);
                     return view;
                 },

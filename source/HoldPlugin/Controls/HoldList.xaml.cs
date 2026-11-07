@@ -11,6 +11,7 @@ public partial class HoldList : UserControl
     {
         InitializeComponent();
         DataContext = viewModel;
+        Loaded += (_, _) => viewModel.OnViewLoaded();
     }
 
     void Designator_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
