@@ -341,8 +341,12 @@ public class Plugin
         // Sync hold states in case FDR objects were replaced (e.g. after assuming a tag from NONE
         // or accepting a handoff, FDRsChanged fires with a new FDR that already has
         // IsTrackedByMe=true, so no PropertyChanged transition fires for that property).
+        HoldPatches.RemoveAllExcept(_subscribedFDRs.Keys.ToArray());
+
         foreach (var fdr in _subscribedFDRs.Values.ToArray())
         {
+            UpdateHoldPatchState(fdr);
+
             var existingHold = _activeHolds.FirstOrDefault(h => h.Callsign == fdr.Callsign);
             if (existingHold is not null)
             {
@@ -399,6 +403,8 @@ public class Plugin
 
             try
             {
+                UpdateHoldPatchState(fdr);
+
                 var existingHold = _activeHolds.FirstOrDefault(h => h.Callsign == fdr.Callsign);
 
                 if (existingHold != null)
@@ -462,6 +468,45 @@ public class Plugin
             : null;
 
         CreateHoldItem(fdr, holdSegment, holdExitTime);
+    }
+
+    /// <summary>
+    ///     Update the hold data for the Harmony patches from the label data. Do this for each FDR,
+    ///     also when the FDR is not in my jurisdiction, so that each controller sees the same ETOs.
+    /// </summary>
+    static void UpdateHoldPatchState(FDP2.FDR fdr)
+    {
+        if (!TryParseHoldAnnotation(fdr, out var holdPointPrefix, out var exitTimeMinutes))
+        {
+            HoldPatches.Remove(fdr);
+            return;
+        }
+
+        // Keep the hold point and the default exit time of an existing hold. The aircraft can
+        // pass waypoints after the hold point, and the ETO of the hold point is the exit time.
+        if (!HoldPatches.TryGet(fdr.Callsign, out var existingState))
+        {
+            var holdSegment = FindHoldWaypoint(fdr, holdPointPrefix);
+            if (holdSegment is null)
+                return;
+
+            // vatSys sets the ETO to DateTime.MaxValue when it has no estimate.
+            var holdPointEto = holdSegment.ETO == DateTime.MaxValue ? DateTime.UtcNow : holdSegment.ETO;
+            var defaultExitTime = holdPointEto + DefaultHoldDuration;
+            existingState = new HoldPatchState(holdSegment.Intersection.Name, defaultExitTime, defaultExitTime);
+        }
+
+        var exitTime = existingState.DefaultExitTime;
+        if (exitTimeMinutes.HasValue)
+        {
+            // Keep the existing exit time while the minutes do not change. Otherwise, the exit
+            // time moves to the next hour when it is in the past.
+            exitTime = existingState.ExitTime.Minute == exitTimeMinutes.Value
+                ? existingState.ExitTime
+                : CalculateExitTime(exitTimeMinutes.Value);
+        }
+
+        HoldPatches.Set(fdr, existingState with { ExitTime = exitTime });
     }
 
     // Find the hold-point waypoint on the route. Search forward from the current waypoint first.
@@ -543,7 +588,7 @@ public class Plugin
         };
     }
 
-    DateTime CalculateExitTime(int exitTimeMinutes)
+    static DateTime CalculateExitTime(int exitTimeMinutes)
     {
         // Calculate target exit time based on minutes past the hour
         var targetExitTime = new DateTime(
@@ -578,15 +623,11 @@ public class Plugin
 
         var state = GetHoldItemState(fdr);
 
-        // vatSys sets the ETO to DateTime.MaxValue when it has no estimate.
-        var holdPointEto = holdSegment.ETO == DateTime.MaxValue ? DateTime.UtcNow : holdSegment.ETO;
-
         var holdItem = new HoldItem(
             fdr.Callsign,
             holdSegment.Intersection.Name,
             holdSegment.ATO,
             holdExitTime,
-            holdPointEto + DefaultHoldDuration,
             isDesignated,
             level,
             clearedFlightLevel,
@@ -943,7 +984,6 @@ public class Plugin
 
     public void Receive(RefreshHoldsCommand message)
     {
-        HoldPatches.Sync(ActiveHolds);
         EnsureHoldWindowsAreOpen();
     }
 }

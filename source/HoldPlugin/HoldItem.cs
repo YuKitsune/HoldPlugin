@@ -8,7 +8,6 @@ public class HoldItem
     public string HoldPoint { get; set; }
     public DateTime HoldEntryTime { get; set; }
     public DateTime? HoldExitTime { get; set; }
-    public DateTime DefaultHoldExitTime { get; }
     public bool IsDesignated { get; set; }
     public int Level { get; set; }
     public IClearedFlightLevel ClearedFlightLevel { get; set; }
@@ -21,7 +20,6 @@ public class HoldItem
         string holdPoint,
         DateTime holdEntryTime,
         DateTime? holdExitTime,
-        DateTime defaultHoldExitTime,
         bool isDesignated,
         int level,
         IClearedFlightLevel clearedFlightLevel,
@@ -33,7 +31,6 @@ public class HoldItem
         HoldPoint = holdPoint;
         HoldEntryTime = holdEntryTime;
         HoldExitTime = holdExitTime;
-        DefaultHoldExitTime = defaultHoldExitTime;
         IsDesignated = isDesignated;
         Level = level;
         ClearedFlightLevel = clearedFlightLevel;

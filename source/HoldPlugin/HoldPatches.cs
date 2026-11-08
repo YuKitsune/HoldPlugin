@@ -8,7 +8,7 @@ namespace HoldPlugin;
 ///     The hold data that the Harmony patches use. The patches run on vatSys threads, thus this
 ///     data is kept in a thread-safe dictionary.
 /// </summary>
-public record HoldPatchState(string HoldPoint, DateTime ExitTime);
+public record HoldPatchState(string HoldPoint, DateTime ExitTime, DateTime DefaultExitTime);
 
 /// <summary>
 ///     Harmony patches that stop vatSys from moving an aircraft along its route while the
@@ -24,42 +24,46 @@ public static class HoldPatches
         harmony.PatchAll(typeof(HoldPatches).Assembly);
     }
 
-    /// <summary>
-    ///     Update the hold data from the active holds. Process the FDR again when its hold data
-    ///     changes, so that vatSys calculates the ETOs again.
-    /// </summary>
-    public static void Sync(IReadOnlyCollection<HoldItem> activeHolds)
+    public static bool TryGet(string callsign, out HoldPatchState holdState)
     {
-        var expectedStates = activeHolds.ToDictionary(
-            h => h.Callsign,
-            h => new HoldPatchState(h.HoldPoint, h.HoldExitTime ?? h.DefaultHoldExitTime));
-
-        foreach (var callsign in Holds.Keys.ToArray())
-        {
-            if (expectedStates.ContainsKey(callsign))
-                continue;
-
-            Holds.TryRemove(callsign, out _);
-            ProcessFDR(callsign);
-        }
-
-        foreach (var expectedState in expectedStates)
-        {
-            if (Holds.TryGetValue(expectedState.Key, out var currentState) && currentState == expectedState.Value)
-                continue;
-
-            Holds[expectedState.Key] = expectedState.Value;
-            ProcessFDR(expectedState.Key);
-        }
+        return Holds.TryGetValue(callsign, out holdState);
     }
 
-    static void ProcessFDR(string callsign)
+    /// <summary>
+    ///     Set the hold data for the FDR. When the hold data changes, process the FDR again, so
+    ///     that vatSys calculates the ETOs again.
+    /// </summary>
+    public static void Set(FDP2.FDR fdr, HoldPatchState holdState)
     {
-        var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == callsign);
-        if (fdr is null)
+        if (Holds.TryGetValue(fdr.Callsign, out var currentState) && currentState == holdState)
+            return;
+
+        Holds[fdr.Callsign] = holdState;
+        FDP2.Process(fdr);
+    }
+
+    /// <summary>
+    ///     Remove the hold data for the FDR. Then process the FDR again, so that vatSys calculates
+    ///     the ETOs again.
+    /// </summary>
+    public static void Remove(FDP2.FDR fdr)
+    {
+        if (!Holds.TryRemove(fdr.Callsign, out _))
             return;
 
         FDP2.Process(fdr);
+    }
+
+    /// <summary>
+    ///     Remove the hold data for the FDRs that vatSys does not have anymore.
+    /// </summary>
+    public static void RemoveAllExcept(IReadOnlyCollection<string> callsigns)
+    {
+        foreach (var callsign in Holds.Keys.ToArray())
+        {
+            if (!callsigns.Contains(callsign))
+                Holds.TryRemove(callsign, out _);
+        }
     }
 
     static bool TryGetHoldPointIndex(FDP2.FDR? fdr, out HoldPatchState holdState, out int holdPointIndex)
