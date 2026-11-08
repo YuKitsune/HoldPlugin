@@ -62,6 +62,9 @@ class Build : FalloutBuild
     const string DebugPluginName = "HoldPlugin - Debug";
     const string PluginAssemblyFileName = "HoldPlugin.dll";
 
+    // Harmony must stay a separate assembly. Do not merge it into the plugin assembly.
+    const string HarmonyAssemblyFileName = "0Harmony.dll";
+
     string PluginName => Configuration == Configuration.Debug ? DebugPluginName : ReleasePluginName;
 
     AbsolutePath PluginProjectPath => RootDirectory / "source" / "HoldPlugin" / "HoldPlugin.csproj";
@@ -152,7 +155,7 @@ class Build : FalloutBuild
             var mainAssembly = PluginBuildOutputDirectory / PluginAssemblyFileName;
             var assembliesToMerge = PluginBuildOutputDirectory
                 .GlobFiles("*.dll")
-                .Except([mainAssembly])
+                .Except([mainAssembly, PluginBuildOutputDirectory / HarmonyAssemblyFileName])
                 .ToArray();
 
             if (!mainAssembly.FileExists())

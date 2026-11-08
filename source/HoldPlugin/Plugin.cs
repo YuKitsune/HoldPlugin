@@ -33,6 +33,9 @@ public class Plugin
     IRecipient<RefreshHoldsCommand>
 {
     const string HoldIndicatorStripItemTypePrefix = "HoldPlugin_Indicator_";
+
+    // The hold duration to use when the label data has no exit time.
+    static readonly TimeSpan DefaultHoldDuration = TimeSpan.FromMinutes(10);
     
 #if DEBUG
     public const string Name = "Hold Plugin - Debug";
@@ -80,6 +83,8 @@ public class Plugin
         WeakReferenceMessenger.Default.Register<HoldPointAddedCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldPointRemovedCommand>(this);
         WeakReferenceMessenger.Default.Register<RefreshHoldsCommand>(this);
+
+        HoldPatches.Apply(Name);
 
         MMI.SelectedTrackChanged += OnSelectedTrackChanged;
         FDP2.FDRsChanged += OnFDRsChanged;
@@ -231,6 +236,8 @@ public class Plugin
                 if (updated.CoupledFDR is null)
                     return;
 
+                HoldPatches.UpdateExitEstimate(updated.CoupledFDR);
+
                 var holdItem = _activeHolds.FirstOrDefault(h => h.Callsign == updated.CoupledFDR.Callsign);
                 if (holdItem is not null)
                 {
@@ -336,8 +343,12 @@ public class Plugin
         // Sync hold states in case FDR objects were replaced (e.g. after assuming a tag from NONE
         // or accepting a handoff, FDRsChanged fires with a new FDR that already has
         // IsTrackedByMe=true, so no PropertyChanged transition fires for that property).
+        HoldPatches.RemoveAllExcept(_subscribedFDRs.Keys.ToArray());
+
         foreach (var fdr in _subscribedFDRs.Values.ToArray())
         {
+            UpdateHoldPatchState(fdr);
+
             var existingHold = _activeHolds.FirstOrDefault(h => h.Callsign == fdr.Callsign);
             if (existingHold is not null)
             {
@@ -394,6 +405,8 @@ public class Plugin
 
             try
             {
+                UpdateHoldPatchState(fdr);
+
                 var existingHold = _activeHolds.FirstOrDefault(h => h.Callsign == fdr.Callsign);
 
                 if (existingHold != null)
@@ -459,12 +472,51 @@ public class Plugin
         CreateHoldItem(fdr, holdSegment, holdExitTime);
     }
 
+    /// <summary>
+    ///     Update the hold data for the Harmony patches from the label data. Do this for each FDR,
+    ///     also when the FDR is not in my jurisdiction, so that each controller sees the same ETOs.
+    /// </summary>
+    static void UpdateHoldPatchState(FDP2.FDR fdr)
+    {
+        if (!TryParseHoldAnnotation(fdr, out var holdPointPrefix, out var exitTimeMinutes))
+        {
+            HoldPatches.Remove(fdr);
+            return;
+        }
+
+        // Keep the hold point and the default exit time of an existing hold. The aircraft can
+        // pass waypoints after the hold point, and the ETO of the hold point is the exit time.
+        if (!HoldPatches.TryGet(fdr.Callsign, out var existingState))
+        {
+            var holdSegment = FindHoldWaypoint(fdr, holdPointPrefix);
+            if (holdSegment is null)
+                return;
+
+            // vatSys sets the ETO to DateTime.MaxValue when it has no estimate.
+            var holdPointEto = holdSegment.ETO == DateTime.MaxValue ? DateTime.UtcNow : holdSegment.ETO;
+            var defaultExitTime = holdPointEto + DefaultHoldDuration;
+            existingState = new HoldPatchState(holdSegment.Intersection.Name, defaultExitTime, defaultExitTime);
+        }
+
+        var exitTime = existingState.DefaultExitTime;
+        if (exitTimeMinutes.HasValue)
+        {
+            // Keep the existing exit time while the minutes do not change. Otherwise, the exit
+            // time moves to the next hour when it is in the past.
+            exitTime = existingState.ExitTime.Minute == exitTimeMinutes.Value
+                ? existingState.ExitTime
+                : CalculateExitTime(exitTimeMinutes.Value);
+        }
+
+        HoldPatches.Set(fdr, existingState with { ExitTime = exitTime });
+    }
+
     // Find the hold-point waypoint on the route. Search forward from the current waypoint first.
     // Then search backward from the current waypoint, because the aircraft can pass the hold
     // point (e.g. aircraft is established in the hold, or a handoff is accepted after
     // overflight). The backward search starts at the current waypoint, so that it does not match
     // a waypoint at the start of the route before a nearer one.
-    static FDP2.FDR.ExtractedRoute.Segment? FindHoldWaypoint(FDP2.FDR fdr, string holdPointPrefix)
+    internal static FDP2.FDR.ExtractedRoute.Segment? FindHoldWaypoint(FDP2.FDR fdr, string holdPointPrefix)
     {
         var route = fdr.ParsedRoute.ToList();
         var currentIndex = Math.Max(fdr.ParsedRoute.OverflownIndex, 0);
@@ -538,7 +590,7 @@ public class Plugin
         };
     }
 
-    DateTime CalculateExitTime(int exitTimeMinutes)
+    static DateTime CalculateExitTime(int exitTimeMinutes)
     {
         // Calculate target exit time based on minutes past the hour
         var targetExitTime = new DateTime(
@@ -645,6 +697,13 @@ public class Plugin
             try
             {
                 CancelHold(hold);
+
+                // Remove the hold from the label data too. The label data change stops the
+                // patches and resets the estimates, also on the other clients.
+                var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == hold.Callsign);
+                if (fdr is not null)
+                    RemoveHoldFromLabel(fdr);
+
                 WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
             }
             finally
@@ -789,6 +848,23 @@ public class Plugin
     }
 
     /// <summary>
+    ///     Remove the hold section (H/XXX or H/XXX/42) from the label data. Keep the other parts
+    ///     of the label data. No-op when no hold section is present.
+    /// </summary>
+    void RemoveHoldFromLabel(FDP2.FDR fdr)
+    {
+        var parts = fdr.LabelOpData.Split(' ');
+        var remainingParts = parts
+            .Where(p => !p.StartsWith("H/") && !p.StartsWith("H\\"))
+            .ToArray();
+
+        if (remainingParts.Length == parts.Length)
+            return;
+
+        FDP2.SetLabelData(fdr, string.Join(" ", remainingParts));
+    }
+
+    /// <summary>
     ///     Remove the exit time segment from the hold section of the label data, leaving the
     ///     hold designation and waypoint name (including any shortening) and separators intact.
     ///     No-op when no exit time segment is present.
@@ -816,7 +892,7 @@ public class Plugin
 
             // Drop the 2nd separator and everything after it (the exit time)
             parts[i] = part.Substring(0, separatorIndices[1]);
-            fdr.LabelOpData = string.Join(" ", parts);
+            FDP2.SetLabelData(fdr, string.Join(" ", parts));
             return;
         }
     }
@@ -858,7 +934,7 @@ public class Plugin
                 parts[i] = part + part[separatorIndices[0]] + minutesText;
             }
 
-            fdr.LabelOpData = string.Join(" ", parts);
+            FDP2.SetLabelData(fdr, string.Join(" ", parts));
             return;
         }
     }
