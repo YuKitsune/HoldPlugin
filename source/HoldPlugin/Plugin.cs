@@ -439,16 +439,16 @@ public class Plugin
             UpdateEstimates(fdr);
         }
 
-        if (state != hold.State)
+        if (state == hold.State)
+            return;
+        
+        if (state == HoldItemState.Unconcerned)
         {
-            if (state == HoldItemState.Unconcerned)
-            {
-                FreeSlotIfUnused(hold.HoldPoint);
-            }
-            else
-            {
-                AllocateSlot(hold.HoldPoint);
-            }
+            FreeSlotIfUnused(hold.HoldPoint);
+        }
+        else
+        {
+            AllocateSlot(hold.HoldPoint);
         }
     }
 
