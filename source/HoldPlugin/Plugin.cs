@@ -866,7 +866,7 @@ public class Plugin
 
             // Drop the 2nd separator and everything after it (the exit time)
             parts[i] = part.Substring(0, separatorIndices[1]);
-            fdr.LabelOpData = string.Join(" ", parts);
+            FDP2.SetLabelData(fdr, string.Join(" ", parts));
             return;
         }
     }
@@ -908,7 +908,7 @@ public class Plugin
                 parts[i] = part + part[separatorIndices[0]] + minutesText;
             }
 
-            fdr.LabelOpData = string.Join(" ", parts);
+            FDP2.SetLabelData(fdr, string.Join(" ", parts));
             return;
         }
     }
