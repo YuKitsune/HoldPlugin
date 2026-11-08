@@ -18,6 +18,9 @@ public static class HoldPatches
 {
     static readonly ConcurrentDictionary<string, HoldPatchState> Holds = new();
 
+    // vatSys does not calculate an estimate from radar below this ground speed (knots).
+    const double MinimumGroundSpeed = 10;
+
     public static void Apply(string harmonyId)
     {
         var harmony = new Harmony(harmonyId);
@@ -66,9 +69,7 @@ public static class HoldPatches
 
     /// <summary>
     ///     The aircraft leaves the hold now. Remove the position reports that vatSys made during
-    ///     the hold, set the ATO of the hold point to now, and calculate the ETOs from it.
-    ///     The APR then has the correct overflown index to start from. If the APR cannot find
-    ///     the aircraft on the route, the ETOs stay calculated from the hold point.
+    ///     the hold, and calculate the ETOs again from the hold point.
     /// </summary>
     static void ResetEstimatesFromHoldPoint(FDP2.FDR fdr, FDP2.FDR.ExtractedRoute.Segment holdSegment)
     {
@@ -78,8 +79,25 @@ public static class HoldPatches
 
         RemovePositionReportsAfter(fdr, holdSegment.ATO);
 
-        holdSegment.ATONoEvent = DateTime.UtcNow;
-        fdr.ParsedRoute.CalculateETOs(holdSegment.ATO, fdr.ParsedRoute.IndexOf(holdSegment));
+        var radarTrack = fdr.CoupledTrack;
+        if (radarTrack is null || radarTrack.GroundSpeed < MinimumGroundSpeed)
+        {
+            // There is no radar position. Thus the aircraft leaves the hold point now.
+            holdSegment.ATONoEvent = DateTime.UtcNow;
+        }
+        else
+        {
+            // The aircraft must fly back to the hold point. Remove the ATO, so that vatSys sets
+            // it again when the aircraft crosses the hold point. Until then, use a PETO from the
+            // radar position. vatSys does not change the ETO of a PETO when it calculates the ETOs.
+            var distance = Conversions.CalculateDistance(radarTrack.LatLong, holdSegment.Intersection.LatLong);
+            holdSegment.ATONoEvent = DateTime.MaxValue;
+            holdSegment.IsPETO = true;
+            holdSegment.ETONoEvent = DateTime.UtcNow + TimeSpan.FromHours(distance / radarTrack.GroundSpeed);
+        }
+
+        // The seed time is not used. CalculateETOs uses the ATO or the PETO of the hold point.
+        fdr.ParsedRoute.CalculateETOs(DateTime.UtcNow, fdr.ParsedRoute.IndexOf(holdSegment));
     }
 
     // Remove the APR segments with an ATO after the given time. Add the EET and the distance of

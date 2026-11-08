@@ -695,6 +695,13 @@ public class Plugin
             try
             {
                 CancelHold(hold);
+
+                // Remove the hold from the label data too. The label data change stops the
+                // patches and resets the estimates, also on the other clients.
+                var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == hold.Callsign);
+                if (fdr is not null)
+                    RemoveHoldFromLabel(fdr);
+
                 WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
             }
             finally
@@ -836,6 +843,23 @@ public class Plugin
         });
 
         WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
+    }
+
+    /// <summary>
+    ///     Remove the hold section (H/XXX or H/XXX/42) from the label data. Keep the other parts
+    ///     of the label data. No-op when no hold section is present.
+    /// </summary>
+    void RemoveHoldFromLabel(FDP2.FDR fdr)
+    {
+        var parts = fdr.LabelOpData.Split(' ');
+        var remainingParts = parts
+            .Where(p => !p.StartsWith("H/") && !p.StartsWith("H\\"))
+            .ToArray();
+
+        if (remainingParts.Length == parts.Length)
+            return;
+
+        FDP2.SetLabelData(fdr, string.Join(" ", remainingParts));
     }
 
     /// <summary>
