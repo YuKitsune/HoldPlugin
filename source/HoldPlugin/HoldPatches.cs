@@ -43,15 +43,66 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     Remove the hold data for the FDR. Then process the FDR again, so that vatSys calculates
-    ///     the ETOs again.
+    ///     Remove the hold data for the FDR. Then request an APR, so that vatSys calculates the
+    ///     ETOs again from the current position of the aircraft.
     /// </summary>
     public static void Remove(FDP2.FDR fdr)
     {
+        // Find the hold point before the hold data is removed.
+        TryGetHoldPointIndex(fdr, out _, out var holdPointIndex);
+
         if (!Holds.TryRemove(fdr.Callsign, out _))
             return;
 
-        FDP2.Process(fdr);
+        if (holdPointIndex != -1)
+            ResetEstimatesFromHoldPoint(fdr, fdr.ParsedRoute[holdPointIndex]);
+
+        // RequestAPR does nothing when the FDR has no coupled track.
+        if (fdr.CoupledTrack is null)
+            FDP2.Process(fdr);
+        else
+            RDP.RequestAPR(fdr);
+    }
+
+    /// <summary>
+    ///     The aircraft leaves the hold now. Remove the position reports that vatSys made during
+    ///     the hold, set the ATO of the hold point to now, and calculate the ETOs from it.
+    ///     The APR then has the correct overflown index to start from. If the APR cannot find
+    ///     the aircraft on the route, the ETOs stay calculated from the hold point.
+    /// </summary>
+    static void ResetEstimatesFromHoldPoint(FDP2.FDR fdr, FDP2.FDR.ExtractedRoute.Segment holdSegment)
+    {
+        // The aircraft did not get to the hold point. The ETOs from vatSys are correct.
+        if (holdSegment.ATO == DateTime.MaxValue)
+            return;
+
+        RemovePositionReportsAfter(fdr, holdSegment.ATO);
+
+        holdSegment.ATONoEvent = DateTime.UtcNow;
+        fdr.ParsedRoute.CalculateETOs(holdSegment.ATO, fdr.ParsedRoute.IndexOf(holdSegment));
+    }
+
+    // Remove the APR segments with an ATO after the given time. Add the EET and the distance of
+    // each removed segment to the next segment, the same as vatSys does.
+    static void RemovePositionReportsAfter(FDP2.FDR fdr, DateTime time)
+    {
+        foreach (var segment in fdr.ParsedRoute.ToList())
+        {
+            if (segment.Type != FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.APRUPR)
+                continue;
+
+            if (segment.ATO == DateTime.MaxValue || segment.ATO <= time)
+                continue;
+
+            var index = fdr.ParsedRoute.IndexOf(segment);
+            if (index < 1 || index > fdr.ParsedRoute.Count - 2)
+                continue;
+
+            var nextSegment = fdr.ParsedRoute[index + 1];
+            nextSegment.EET += segment.EET;
+            nextSegment.Distance += segment.Distance;
+            fdr.ParsedRoute.Remove(segment);
+        }
     }
 
     /// <summary>
