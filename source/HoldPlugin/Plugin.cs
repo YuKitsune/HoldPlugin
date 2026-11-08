@@ -374,7 +374,9 @@ public class Plugin
                     else
                     {
                         if (exitTimeMinutes.HasValue)
+                        {
                             UpdateHold(fdr, existingHold, exitTimeMinutes.Value);
+                        }
 
                         // Update FDR-derived properties
                         UpdateHoldItemFromFDR(fdr, existingHold);
@@ -416,7 +418,38 @@ public class Plugin
             holdExitTime = holdPointEto + DefaultHoldDuration;
         }
 
-        CreateHoldItem(fdr, holdSegment, holdExitTime);
+        var selectedCallsign = MMI.SelectedTrack?.GetFDR()?.Callsign;
+        var isDesignated = fdr.Callsign == selectedCallsign;
+
+        var level = fdr.CoupledTrack?.CorrectedAltitude ?? fdr.PRL;
+        IClearedFlightLevel clearedFlightLevel = fdr.CFLLower <= 0
+            ? new ClearedFlightLevel(fdr.CFLUpper)
+            : new ClearedBlockLevel(fdr.CFLLower, fdr.CFLUpper);
+
+        var state = GetHoldItemState(fdr);
+
+        var holdItem = new HoldItem(
+            fdr.Callsign,
+            holdSegment.Intersection.Name,
+            GetHoldEntryTime(holdSegment),
+            holdExitTime,
+            isDesignated,
+            level,
+            clearedFlightLevel,
+            fdr.RVSM,
+            fdr.GlobalOpData,
+            state);
+
+        _holdRepository.Add(holdItem);
+
+        if (state != HoldItemState.Unconcerned)
+            AllocateSlot(holdItem.HoldPoint);
+
+        UpdateEstimates(fdr);
+
+        EnsureHoldWindowsAreOpen();
+
+        WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
     }
 
     // Find the hold-point waypoint on the route. Search forward from the current waypoint first.
@@ -465,7 +498,7 @@ public class Plugin
     ///     Call this after a hold for the FDR is added to the hold repository, or after its exit
     ///     time changes. Process the FDR again, so that vatSys calculates the ETOs again.
     /// </summary>
-    void UpdateHoldEstimates(FDP2.FDR fdr)
+    void UpdateEstimates(FDP2.FDR fdr)
     {
         FDP2.Process(fdr);
     }
@@ -475,39 +508,28 @@ public class Plugin
     ///     ETO of the hold point again, then process the FDR again, so that vatSys calculates the
     ///     ETOs again.
     /// </summary>
-    void ResetHoldEstimates(FDP2.FDR fdr, HoldItem hold)
+    void ResetEstimates(FDP2.FDR fdr, HoldItem hold)
     {
         var holdSegment = FindHoldWaypoint(fdr, hold.HoldPoint);
         if (holdSegment is not null)
-            ResetEstimatesFromHoldPoint(fdr, holdSegment, hold.HoldEntryTime is not null);
-
-        FDP2.Process(fdr);
-    }
-
-    /// <summary>
-    ///     The hold ends now. Calculate the ETO of the hold point from the radar position and the
-    ///     ground speed. Then vatSys sets the ATO of the hold point when the aircraft crosses it.
-    /// </summary>
-    static void ResetEstimatesFromHoldPoint(
-        FDP2.FDR fdr,
-        FDP2.FDR.ExtractedRoute.Segment holdSegment,
-        bool isHoldEntered)
-    {
-        // The hold started after the aircraft crossed the hold point. Remove the position reports
-        // that vatSys made after the hold point.
-        if (holdSegment.ATO != DateTime.MaxValue)
         {
-            RemovePositionReportsAfter(fdr, holdSegment.ATO);
-            holdSegment.ATONoEvent = DateTime.MaxValue;
+            // The hold started after the aircraft crossed the hold point. Remove the position reports
+            // that vatSys made after the hold point.
+            if (holdSegment.ATO != DateTime.MaxValue)
+            {
+                RemovePositionReportsAfter(fdr, holdSegment.ATO);
+                holdSegment.ATONoEvent = DateTime.MaxValue;
+            }
+
+            var didEnterHold = hold.HoldEntryTime is not null;
+            if (!TryAddPositionReportBeforeHoldPoint(fdr, holdSegment) && didEnterHold)
+            {
+                // There is no radar position. Thus the aircraft leaves the hold point now, if it got to the hold point.
+                holdSegment.ATONoEvent = DateTime.UtcNow;
+            }
         }
 
-        if (TryAddPositionReportBeforeHoldPoint(fdr, holdSegment))
-            return;
-
-        // There is no radar position. Thus the aircraft leaves the hold point now, if it got to the
-        // hold point.
-        if (isHoldEntered)
-            holdSegment.ATONoEvent = DateTime.UtcNow;
+        FDP2.Process(fdr);
     }
 
     /// <summary>
@@ -604,9 +626,13 @@ public class Plugin
             return;
 
         if (state == HoldItemState.Unconcerned)
+        {
             FreeSlotIfUnused(hold.HoldPoint);
+        }
         else
+        {
             AllocateSlot(hold.HoldPoint);
+        }
     }
 
     /// <summary>
@@ -626,6 +652,7 @@ public class Plugin
     {
         var isUsed = _holdRepository.GetHolds()
             .Any(h => h.HoldPoint == holdPoint && h.State != HoldItemState.Unconcerned);
+        
         if (isUsed)
             return;
 
@@ -680,60 +707,6 @@ public class Plugin
         return targetExitTime;
     }
 
-    HoldItem CreateHoldItem(
-        FDP2.FDR fdr,
-        FDP2.FDR.ExtractedRoute.Segment holdSegment,
-        DateTime holdExitTime)
-    {
-        var selectedCallsign = MMI.SelectedTrack?.GetFDR()?.Callsign;
-        var isDesignated = fdr.Callsign == selectedCallsign;
-
-        var level = fdr.CoupledTrack?.CorrectedAltitude ?? fdr.PRL;
-        IClearedFlightLevel clearedFlightLevel = fdr.CFLLower <= 0
-            ? new ClearedFlightLevel(fdr.CFLUpper)
-            : new ClearedBlockLevel(fdr.CFLLower, fdr.CFLUpper);
-
-        var state = GetHoldItemState(fdr);
-
-        var holdItem = new HoldItem(
-            fdr.Callsign,
-            holdSegment.Intersection.Name,
-            GetHoldEntryTime(holdSegment),
-            holdExitTime,
-            isDesignated,
-            level,
-            clearedFlightLevel,
-            fdr.RVSM,
-            fdr.GlobalOpData,
-            state);
-
-        _holdRepository.Add(holdItem);
-
-        if (state != HoldItemState.Unconcerned)
-            AllocateSlot(holdItem.HoldPoint);
-
-        UpdateHoldEstimates(fdr);
-
-        EnsureHoldWindowsAreOpen();
-
-        WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
-
-        return holdItem;
-    }
-
-    void UntrackHold(FDP2.FDR? fdr, HoldItem hold)
-    {
-        if (!_holdRepository.TryRemove(hold.Callsign))
-            return;
-
-        if (fdr is not null)
-            ResetHoldEstimates(fdr, hold);
-
-        FreeSlotIfUnused(hold.HoldPoint);
-
-        WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
-    }
-
     void UpdateHold(FDP2.FDR fdr, HoldItem hold, int exitTimeMinutes)
     {
         // Keep the existing exit time while the minutes do not change. Otherwise, the exit time
@@ -744,15 +717,25 @@ public class Plugin
         var exitTime = CalculateExitTime(exitTimeMinutes);
 
         _holdRepository.Update(hold.Callsign, h => h with { HoldExitTime = exitTime });
-        UpdateHoldEstimates(fdr);
+        UpdateEstimates(fdr);
 
         Debug.WriteLine($"[HOLD DEBUG] Hold updated for {hold.Callsign}, new exit time: {exitTime}");
     }
 
     void CancelHold(FDP2.FDR? fdr, HoldItem hold)
     {
-        UntrackHold(fdr, hold);
-        Debug.WriteLine($"[HOLD DEBUG] Hold cancelled for {hold.Callsign}");
+        if (!_holdRepository.TryRemove(hold.Callsign))
+            return;
+
+        if (fdr is not null)
+        {
+            ResetEstimates(fdr, hold);
+            RemoveHoldFromLabel(fdr);
+        }
+
+        FreeSlotIfUnused(hold.HoldPoint);
+
+        WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
     }
 
     public void Receive(DesignateAircraftCommand message)
@@ -783,13 +766,6 @@ public class Plugin
             {
                 var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == hold.Callsign);
                 CancelHold(fdr, hold);
-
-                // Remove the hold from the label data too, so that the other clients cancel the
-                // hold.
-                if (fdr is not null)
-                    RemoveHoldFromLabel(fdr);
-
-                WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
             }
             finally
             {
@@ -853,7 +829,7 @@ public class Plugin
                         try
                         {
                             _holdRepository.Update(holdItem.Callsign, h => h with { HoldExitTime = selectedTime });
-                            UpdateHoldEstimates(fdr);
+                            UpdateEstimates(fdr);
                             SetExitTimeOnLabel(fdr, selectedTime.Minute);
                             WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
                         }
