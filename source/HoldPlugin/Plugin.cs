@@ -793,7 +793,7 @@ public class Plugin
             if (fdr is null)
                 return;
 
-            FDP2.SetGlobalOpData(fdr, message.GlobalOps);
+            FDP2.SetGlobalOps(fdr, message.GlobalOps);
         });
     }
 
