@@ -41,11 +41,11 @@ public class Plugin
     public const string Name = "Hold Plugin";
 #endif
 
-    static readonly Dictionary<string, DateTimeOffset> ErrorMessages = new();
+    readonly ErrorReporter _errorReporter = new();
 
     // Do all work that changes the plugin state on this queue. The queue does one work item at a
     // time, so the work items do not need a lock.
-    readonly WorkQueue _workQueue = new(AddError);
+    readonly WorkQueue _workQueue;
 
     readonly HoldRepository _holdRepository = new();
     readonly HoldSlotRepository _holdSlotRepository = new();
@@ -57,7 +57,9 @@ public class Plugin
 
     public Plugin()
     {
-        var guiInvoker = new GuiInvoker(MMI.InvokeOnGUI, AddError);
+        _workQueue = new WorkQueue(_errorReporter.ReportError);
+
+        var guiInvoker = new GuiInvoker(MMI.InvokeOnGUI, _errorReporter.ReportError);
         _windowManager = new WindowManager(guiInvoker);
         
         WeakReferenceMessenger.Default.Register<DesignateAircraftCommand>(this);
@@ -69,26 +71,12 @@ public class Plugin
         WeakReferenceMessenger.Default.Register<HoldPointRemovedCommand>(this);
         WeakReferenceMessenger.Default.Register<RefreshHoldsCommand>(this);
 
-        HoldPatches.Apply(Name, _holdRepository, new ErrorReporter());
+        HoldPatches.Apply(Name, _holdRepository, _errorReporter);
 
         MMI.SelectedTrackChanged += OnSelectedTrackChanged;
         FDP2.FDRsChanged += OnFDRsChanged;
 
         CreateMenuItems();
-    }
-
-    public static void AddError(Exception exception)
-    {
-        lock (ErrorMessages)
-        {
-            // Don't flood the error window with the same message over and over again
-            if (ErrorMessages.TryGetValue(exception.Message, out var lastShown) &&
-                DateTimeOffset.Now - lastShown <= TimeSpan.FromMinutes(1))
-                return;
-
-            Errors.Add(exception, Name);
-            ErrorMessages[exception.Message] = DateTimeOffset.Now;
-        }
     }
 
     void CreateMenuItems()
@@ -109,7 +97,7 @@ public class Plugin
             "Hold Setup",
             _ =>
             {
-                var viewModel = new HoldSetupViewModel(_holdSlotRepository, new GuiInvoker(MMI.InvokeOnGUI, AddError), new ErrorReporter());
+                var viewModel = new HoldSetupViewModel(_holdSlotRepository, new GuiInvoker(MMI.InvokeOnGUI, _errorReporter.ReportError), _errorReporter);
                 var view = new HoldSetup(viewModel);
                 return view;
             },
@@ -139,7 +127,7 @@ public class Plugin
                     $"HOLD {holdPointName} WINDOW",
                     handle =>
                     {
-                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, _holdRepository, _holdSlotRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
+                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, _holdRepository, _holdSlotRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, _errorReporter.ReportError));
                         var view = new HoldList(viewModel);
                         return view;
                     },
@@ -161,7 +149,7 @@ public class Plugin
                 "HOLD OTHER WINDOW",
                 handle =>
                 {
-                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, _holdRepository, _holdSlotRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
+                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, _holdRepository, _holdSlotRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, _errorReporter.ReportError));
                     var view = new HoldList(viewModel);
                     return view;
                 },
@@ -202,7 +190,7 @@ public class Plugin
             }
             catch (Exception ex)
             {
-                AddError(ex);
+                _errorReporter.ReportError(ex);
             }
         });
     }
@@ -258,7 +246,7 @@ public class Plugin
             }
             catch (Exception ex)
             {
-                AddError(ex);
+                _errorReporter.ReportError(ex);
             }
         });
     }
@@ -273,7 +261,7 @@ public class Plugin
             }
             catch (Exception ex)
             {
-                AddError(ex);
+                _errorReporter.ReportError(ex);
             }
         });
     }
@@ -338,7 +326,7 @@ public class Plugin
             }
             catch (Exception ex)
             {
-                AddError(ex);
+                _errorReporter.ReportError(ex);
             }
         });
     }
@@ -734,7 +722,7 @@ public class Plugin
         }
         catch (Exception ex)
         {
-            AddError(ex);
+            _errorReporter.ReportError(ex);
         }
     }
 
