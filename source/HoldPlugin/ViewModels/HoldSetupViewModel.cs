@@ -7,6 +7,8 @@ namespace HoldPlugin.ViewModels;
 
 public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlotsUpdatedCommand>
 {
+    readonly HoldRepository _holdRepository;
+    readonly GuiInvoker _guiInvoker;
     readonly IErrorReporter _errorReporter;
 
     [ObservableProperty] HoldButtonViewModel _button1;
@@ -14,9 +16,13 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
     [ObservableProperty] HoldButtonViewModel _button3;
     [ObservableProperty] HoldButtonViewModel _button4;
 
-    public HoldSetupViewModel(IHoldPointDescriptor[] holds, IErrorReporter errorReporter)
+    public HoldSetupViewModel(HoldRepository holdRepository, GuiInvoker guiInvoker, IErrorReporter errorReporter)
     {
+        _holdRepository = holdRepository;
+        _guiInvoker = guiInvoker;
         _errorReporter = errorReporter;
+
+        var holds = _holdRepository.GetSlots();
 
         Button1 = new HoldButtonViewModel(0, holds[0].GetHoldPointName() ?? string.Empty, this, _errorReporter);
         Button2 = new HoldButtonViewModel(1, holds[1].GetHoldPointName() ?? string.Empty, this, _errorReporter);
@@ -28,11 +34,14 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
 
     public void Receive(HoldSlotsUpdatedCommand message)
     {
-        var descriptors = Plugin.HoldLists.ToArray();
-        Button1.HoldPointName = descriptors[0].GetHoldPointName();
-        Button2.HoldPointName = descriptors[1].GetHoldPointName();
-        Button3.HoldPointName = descriptors[2].GetHoldPointName();
-        Button4.HoldPointName = descriptors[3].GetHoldPointName();
+        _guiInvoker.InvokeOnUiThread(_ =>
+        {
+            var descriptors = _holdRepository.GetSlots();
+            Button1.HoldPointName = descriptors[0].GetHoldPointName();
+            Button2.HoldPointName = descriptors[1].GetHoldPointName();
+            Button3.HoldPointName = descriptors[2].GetHoldPointName();
+            Button4.HoldPointName = descriptors[3].GetHoldPointName();
+        });
     }
 
     public bool IsHoldPointNameTaken(string pointName, int excludeIndex)

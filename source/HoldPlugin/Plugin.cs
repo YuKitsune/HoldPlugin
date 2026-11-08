@@ -48,19 +48,8 @@ public class Plugin
     readonly WorkQueue _workQueue = new(AddError);
     readonly FdrSemaphoreProvider _semaphoreProvider = new();
 
-    private static readonly IHoldPointDescriptor[] _holdLists =
-    [
-        new Unallocated(),
-        new Unallocated(),
-        new Unallocated(),
-        new Unallocated()
-    ];
-
-    static readonly List<HoldItem> _activeHolds = [];
+    readonly HoldRepository _holdRepository = new();
     readonly Dictionary<string, FDP2.FDR> _subscribedFDRs = new();
-
-    public static IReadOnlyCollection<IHoldPointDescriptor> HoldLists => _holdLists;
-    public static IReadOnlyCollection<HoldItem> ActiveHolds => _activeHolds.ToArray();
 
     readonly WindowManager _windowManager;
 
@@ -126,7 +115,7 @@ public class Plugin
             "Hold Setup",
             _ =>
             {
-                var viewModel = new HoldSetupViewModel(_holdLists, new ErrorReporter());
+                var viewModel = new HoldSetupViewModel(_holdRepository, new GuiInvoker(MMI.InvokeOnGUI, AddError), new ErrorReporter());
                 var view = new HoldSetup(viewModel);
                 return view;
             },
@@ -135,14 +124,17 @@ public class Plugin
 
     void EnsureHoldWindowsAreOpen()
     {
-        foreach (var descriptor in HoldLists)
+        var slots = _holdRepository.GetSlots();
+        var holds = _holdRepository.GetHolds();
+
+        foreach (var descriptor in slots)
         {
             var holdPointName = descriptor.GetHoldPointName();
 
             if (holdPointName is null)
                 continue;
 
-            var itemsToDisplay = ActiveHolds
+            var itemsToDisplay = holds
                 .Where(h => h.HoldPoint == holdPointName && h.State != HoldItemState.Unconcerned)
                 .ToArray();
 
@@ -153,7 +145,7 @@ public class Plugin
                     $"HOLD {holdPointName} WINDOW",
                     handle =>
                     {
-                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
+                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, _holdRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
                         var view = new HoldList(viewModel);
                         return view;
                     },
@@ -164,8 +156,8 @@ public class Plugin
             }
         }
 
-        var allocatedNames = GetAllocatedHoldPointNames();
-        var otherHolds = ActiveHolds
+        var allocatedNames = GetAllocatedHoldPointNames(slots);
+        var otherHolds = holds
             .Where(h => !allocatedNames.Contains(h.HoldPoint) && h.State != HoldItemState.Unconcerned)
             .ToArray();
         if (otherHolds.Any())
@@ -175,7 +167,7 @@ public class Plugin
                 "HOLD OTHER WINDOW",
                 handle =>
                 {
-                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
+                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, _holdRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
                     var view = new HoldList(viewModel);
                     return view;
                 },
@@ -186,40 +178,11 @@ public class Plugin
         }
     }
 
-    static HashSet<string> GetAllocatedHoldPointNames() =>
-        _holdLists
+    static HashSet<string> GetAllocatedHoldPointNames(IHoldPointDescriptor[] slots) =>
+        slots
             .Select(d => d.GetHoldPointName())
             .Where(n => n is not null)
             .ToHashSet()!;
-
-    void TryAutoAllocateSlot(string holdPoint)
-    {
-        var alreadyAllocated = _holdLists.Any(d => d.Matches(holdPoint));
-
-        if (alreadyAllocated)
-            return;
-
-        var emptySlotIndex = Array.FindIndex(_holdLists, d => d is Unallocated);
-        if (emptySlotIndex == -1)
-            return;
-
-        _holdLists[emptySlotIndex] = new AutoAllocated(holdPoint);
-        WeakReferenceMessenger.Default.Send(new HoldSlotsUpdatedCommand());
-    }
-
-    void TryFreeAutoAllocatedSlot(string holdPoint)
-    {
-        if (_activeHolds.Any(h => h.HoldPoint == holdPoint))
-            return;
-
-        var slotIndex = Array.FindIndex(_holdLists, d => d is AutoAllocated && d.Matches(holdPoint));
-        if (slotIndex == -1)
-            return;
-
-        _holdLists[slotIndex] = new Unallocated();
-        _windowManager.CloseWindow(WindowKeys.HoldFor(holdPoint));
-        WeakReferenceMessenger.Default.Send(new HoldSlotsUpdatedCommand());
-    }
 
     public void OnFDRUpdate(FDP2.FDR updated)
     {
@@ -238,10 +201,10 @@ public class Plugin
 
                 HoldPatches.UpdateExitEstimate(updated.CoupledFDR);
 
-                var holdItem = _activeHolds.FirstOrDefault(h => h.Callsign == updated.CoupledFDR.Callsign);
+                var holdItem = _holdRepository.Find(updated.CoupledFDR.Callsign);
                 if (holdItem is not null)
                 {
-                    holdItem.Level = updated.CorrectedAltitude;
+                    _holdRepository.Update(holdItem.Callsign, h => h with { Level = updated.CorrectedAltitude });
                     WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
                 }
             }
@@ -294,9 +257,9 @@ public class Plugin
             try
             {
                 var selectedCallsign = MMI.SelectedTrack?.GetFDR()?.Callsign;
-                foreach (var hold in _activeHolds.ToArray())
+                foreach (var hold in _holdRepository.GetHolds())
                 {
-                    hold.IsDesignated = hold.Callsign == selectedCallsign;
+                    _holdRepository.Update(hold.Callsign, h => h with { IsDesignated = h.Callsign == selectedCallsign });
                 }
 
                 WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
@@ -349,7 +312,7 @@ public class Plugin
         {
             UpdateHoldPatchState(fdr);
 
-            var existingHold = _activeHolds.FirstOrDefault(h => h.Callsign == fdr.Callsign);
+            var existingHold = _holdRepository.Find(fdr.Callsign);
             if (existingHold is not null)
             {
                 UpdateHoldItemFromFDR(fdr, existingHold);
@@ -407,7 +370,7 @@ public class Plugin
             {
                 UpdateHoldPatchState(fdr);
 
-                var existingHold = _activeHolds.FirstOrDefault(h => h.Callsign == fdr.Callsign);
+                var existingHold = _holdRepository.Find(fdr.Callsign);
 
                 if (existingHold != null)
                 {
@@ -431,7 +394,7 @@ public class Plugin
                     {
                         // Hold designator still present but exit-time segment gone; clear the
                         // in-memory exit time so the label stays the source of truth.
-                        existingHold.HoldExitTime = null;
+                        _holdRepository.Update(existingHold.Callsign, h => h with { HoldExitTime = null });
                     }
 
                     // Update FDR-derived properties
@@ -559,17 +522,24 @@ public class Plugin
             ? new ClearedFlightLevel(fdr.CFLUpper)
             : new ClearedBlockLevel(fdr.CFLLower, fdr.CFLUpper);
 
-        hold.ClearedFlightLevel = clearedFlightLevel;
-        hold.RvsmApproved = fdr.RVSM;
-        hold.GlobalOps = fdr.GlobalOpData;
-        hold.State = GetHoldItemState(fdr);
+        var state = GetHoldItemState(fdr);
 
         // ATO is only populated once the aircraft overflies the hold point, which may happen
         // after the hold item was created. Re-read it so the entry time reflects the actual
         // overflight time once available.
         var holdSegment = FindHoldWaypoint(fdr, hold.HoldPoint);
-        if (holdSegment is not null && holdSegment.ATO != default)
-            hold.HoldEntryTime = holdSegment.ATO;
+        DateTime? entryTime = holdSegment is not null && holdSegment.ATO != default
+            ? holdSegment.ATO
+            : null;
+
+        _holdRepository.Update(hold.Callsign, h => h with
+        {
+            ClearedFlightLevel = clearedFlightLevel,
+            RvsmApproved = fdr.RVSM,
+            GlobalOps = fdr.GlobalOpData,
+            State = state,
+            HoldEntryTime = entryTime ?? h.HoldEntryTime
+        });
     }
 
     // FDR property flags don't cleanly distinguish jurisdiction from incoming/outgoing handoff
@@ -637,8 +607,10 @@ public class Plugin
             fdr.GlobalOpData,
             state);
 
-        TryAutoAllocateSlot(holdItem.HoldPoint);
-        _activeHolds.Add(holdItem);
+        var slotAllocated = _holdRepository.Add(holdItem);
+        if (slotAllocated)
+            WeakReferenceMessenger.Default.Send(new HoldSlotsUpdatedCommand());
+
         EnsureHoldWindowsAreOpen();
 
         WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
@@ -648,8 +620,13 @@ public class Plugin
 
     void UntrackHold(HoldItem hold)
     {
-        _activeHolds.Remove(hold);
-        TryFreeAutoAllocatedSlot(hold.HoldPoint);
+        _holdRepository.TryRemove(hold.Callsign, out var slotFreed);
+        if (slotFreed)
+        {
+            _windowManager.CloseWindow(WindowKeys.HoldFor(hold.HoldPoint));
+            WeakReferenceMessenger.Default.Send(new HoldSlotsUpdatedCommand());
+        }
+
         WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
     }
 
@@ -659,7 +636,7 @@ public class Plugin
         if (hold.HoldExitTime == exitTime)
             return;
 
-        hold.HoldExitTime = exitTime;
+        _holdRepository.Update(hold.Callsign, h => h with { HoldExitTime = exitTime });
 
         Debug.WriteLine($"[HOLD DEBUG] Hold updated for {hold.Callsign}, new exit time: {exitTime}");
     }
@@ -687,7 +664,7 @@ public class Plugin
     {
         _workQueue.Enqueue(async () =>
         {
-            var hold = _activeHolds.FirstOrDefault(h => h.Callsign == message.Callsign);
+            var hold = _holdRepository.Find(message.Callsign);
             if (hold == null)
                 return;
 
@@ -717,7 +694,7 @@ public class Plugin
     {
         _workQueue.Enqueue(async () =>
         {
-            var hold = _activeHolds.FirstOrDefault(h => h.Callsign == message.Callsign);
+            var hold = _holdRepository.Find(message.Callsign);
             if (hold == null)
                 return;
 
@@ -753,7 +730,7 @@ public class Plugin
     {
         try
         {
-            var holdItem = ActiveHolds.FirstOrDefault(h => h.Callsign == message.Callsign);
+            var holdItem = _holdRepository.Find(message.Callsign);
             if (holdItem is null)
                 return;
 
@@ -785,8 +762,6 @@ public class Plugin
                 var selectedTime = (DateTime)window.GetType().GetField("SelectedTime").GetValue(window);
                 if (selectedTime >= DateTime.UtcNow)
                 {
-                    holdItem.HoldExitTime = selectedTime;
-
                     _workQueue.Enqueue(async () =>
                     {
                         var semaphore = _semaphoreProvider.Get(fdr.Callsign);
@@ -794,15 +769,15 @@ public class Plugin
 
                         try
                         {
+                            _holdRepository.Update(holdItem.Callsign, h => h with { HoldExitTime = selectedTime });
                             SetExitTimeOnLabel(fdr, selectedTime.Minute);
+                            WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
                         }
                         finally
                         {
                             semaphore.Release();
                         }
                     });
-
-                    WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
 
                     Debug.WriteLine(
                         $"[HOLD DEBUG] Manual exit time update for {holdItem.Callsign}: {selectedTime}");
@@ -819,15 +794,13 @@ public class Plugin
 
     public void Receive(ClearHoldExitTimeCommand message)
     {
-        var holdItem = ActiveHolds.FirstOrDefault(h => h.Callsign == message.Callsign);
+        var holdItem = _holdRepository.Find(message.Callsign);
         if (holdItem is null)
             return;
 
         var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == message.Callsign);
         if (fdr is null)
             return;
-
-        holdItem.HoldExitTime = null;
 
         _workQueue.Enqueue(async () =>
         {
@@ -836,15 +809,15 @@ public class Plugin
 
             try
             {
+                _holdRepository.Update(holdItem.Callsign, h => h with { HoldExitTime = null });
                 RemoveExitTimeFromLabel(fdr);
+                WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
             }
             finally
             {
                 semaphore.Release();
             }
         });
-
-        WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
     }
 
     /// <summary>
@@ -963,18 +936,14 @@ public class Plugin
 
     public void Receive(HoldPointAddedCommand message)
     {
-        var alreadyAllocated = _holdLists.Any(d => d.Matches(message.PointName));
-
-        if (!alreadyAllocated)
-        {
-            _holdLists[message.Index] = new ManuallyAllocated(message.PointName);
-        }
+        _holdRepository.TryAllocateSlot(message.Index, message.PointName);
 
         WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
 
         // Check if there are any aircraft that should still be in OTHER
-        var otherHolds = _activeHolds
-            .Where(h => !GetAllocatedHoldPointNames().Contains(h.HoldPoint) && h.State != HoldItemState.Unconcerned)
+        var allocatedNames = GetAllocatedHoldPointNames(_holdRepository.GetSlots());
+        var otherHolds = _holdRepository.GetHolds()
+            .Where(h => !allocatedNames.Contains(h.HoldPoint) && h.State != HoldItemState.Unconcerned)
             .ToArray();
 
         // Close OTHER window only if no aircraft should be in it
@@ -988,17 +957,14 @@ public class Plugin
 
     public void Receive(HoldPointRemovedCommand message)
     {
-        var index = Array.FindIndex(_holdLists, d => d.Matches(message.PointName));
-        if (index == -1)
+        if (!_holdRepository.TryFreeSlot(message.PointName))
             return;
-
-        _holdLists[index] = new Unallocated();
 
         // Close the window for this hold point
         _windowManager.CloseWindow(WindowKeys.HoldFor(message.PointName));
 
         // Check if any aircraft were holding at this point
-        var holdsAtRemovedPoint = _activeHolds.Where(h => h.HoldPoint == message.PointName).ToArray();
+        var holdsAtRemovedPoint = _holdRepository.GetHolds().Where(h => h.HoldPoint == message.PointName).ToArray();
 
         // If aircraft exist, they need to be shown in OTHER window
         if (holdsAtRemovedPoint.Any())
