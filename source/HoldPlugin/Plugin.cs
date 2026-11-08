@@ -26,7 +26,6 @@ public class Plugin
     IRecipient<OpenClearedLevelMenuCommand>,
     IRecipient<OpenHoldExitMenuCommand>,
     IRecipient<ChangeGlobalOpsCommand>,
-    IRecipient<RemoveHoldItemCommand>,
     IRecipient<HoldPointAddedCommand>,
     IRecipient<HoldPointRemovedCommand>,
     IRecipient<RefreshHoldsCommand>
@@ -48,6 +47,7 @@ public class Plugin
     readonly FdrSemaphoreProvider _semaphoreProvider = new();
 
     readonly HoldRepository _holdRepository = new();
+    readonly HoldSlotRepository _holdSlotRepository = new();
     readonly Dictionary<string, FDP2.FDR> _subscribedFDRs = new();
 
     readonly WindowManager _windowManager;
@@ -66,12 +66,11 @@ public class Plugin
         WeakReferenceMessenger.Default.Register<OpenClearedLevelMenuCommand>(this);
         WeakReferenceMessenger.Default.Register<OpenHoldExitMenuCommand>(this);
         WeakReferenceMessenger.Default.Register<ChangeGlobalOpsCommand>(this);
-        WeakReferenceMessenger.Default.Register<RemoveHoldItemCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldPointAddedCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldPointRemovedCommand>(this);
         WeakReferenceMessenger.Default.Register<RefreshHoldsCommand>(this);
 
-        HoldPatches.Apply(Name);
+        HoldPatches.Apply(Name, _holdRepository);
 
         MMI.SelectedTrackChanged += OnSelectedTrackChanged;
         FDP2.FDRsChanged += OnFDRsChanged;
@@ -113,7 +112,7 @@ public class Plugin
             "Hold Setup",
             _ =>
             {
-                var viewModel = new HoldSetupViewModel(_holdRepository, new GuiInvoker(MMI.InvokeOnGUI, AddError), new ErrorReporter());
+                var viewModel = new HoldSetupViewModel(_holdSlotRepository, new GuiInvoker(MMI.InvokeOnGUI, AddError), new ErrorReporter());
                 var view = new HoldSetup(viewModel);
                 return view;
             },
@@ -122,7 +121,7 @@ public class Plugin
 
     void EnsureHoldWindowsAreOpen()
     {
-        var slots = _holdRepository.GetSlots();
+        var slots = _holdSlotRepository.GetSlots();
         var holds = _holdRepository.GetHolds();
 
         foreach (var descriptor in slots)
@@ -143,7 +142,7 @@ public class Plugin
                     $"HOLD {holdPointName} WINDOW",
                     handle =>
                     {
-                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, _holdRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
+                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, _holdRepository, _holdSlotRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
                         var view = new HoldList(viewModel);
                         return view;
                     },
@@ -165,7 +164,7 @@ public class Plugin
                 "HOLD OTHER WINDOW",
                 handle =>
                 {
-                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, _holdRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
+                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, _holdRepository, _holdSlotRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, AddError));
                     var view = new HoldList(viewModel);
                     return view;
                 },
@@ -311,15 +310,15 @@ public class Plugin
             var existingHold = _holdRepository.Find(fdr.Callsign);
             if (existingHold is not null)
             {
-                UpdateHoldItemFromFDR(fdr, existingHold);
+                if (TryParseHoldAnnotation(fdr, out _, out _))
+                    UpdateHoldItemFromFDR(fdr, existingHold);
+                else
+                    CancelHold(fdr, existingHold);
             }
-            else if (GetHoldItemState(fdr) != HoldItemState.Unconcerned &&
-                     TryParseHoldAnnotation(fdr, out var holdPointPrefix, out var exitTimeMinutes))
+            else if (TryParseHoldAnnotation(fdr, out var holdPointPrefix, out var exitTimeMinutes))
             {
                 InitiateHold(fdr, holdPointPrefix, exitTimeMinutes);
             }
-
-            UpdateHoldPatchState(fdr);
         }
 
         WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
@@ -372,30 +371,22 @@ public class Plugin
 
                     if (!hasHoldAnnotation)
                     {
-                        // H/XXX removed from label data - cancel if we own the FDR
-                        if (fdr.IsTrackedByMe)
-                        {
-                            CancelHold(existingHold);
-                        }
+                        // H/XXX removed from label data
+                        CancelHold(fdr, existingHold);
                     }
-                    else if (exitTimeMinutes.HasValue)
+                    else
                     {
-                        UpdateHold(existingHold, exitTimeMinutes.Value);
-                    }
+                        if (exitTimeMinutes.HasValue)
+                            UpdateHold(fdr, existingHold, exitTimeMinutes.Value);
 
-                    // Update FDR-derived properties
-                    UpdateHoldItemFromFDR(fdr, existingHold);
+                        // Update FDR-derived properties
+                        UpdateHoldItemFromFDR(fdr, existingHold);
+                    }
                 }
-                else
+                else if (TryParseHoldAnnotation(fdr, out var holdPointPrefix, out var exitTimeMinutes))
                 {
-                    var hasHoldAnnotation = TryParseHoldAnnotation(fdr, out var holdPointPrefix, out var exitTimeMinutes);
-                    if (hasHoldAnnotation && GetHoldItemState(fdr) != HoldItemState.Unconcerned)
-                    {
-                        InitiateHold(fdr, holdPointPrefix, exitTimeMinutes);
-                    }
+                    InitiateHold(fdr, holdPointPrefix, exitTimeMinutes);
                 }
-
-                UpdateHoldPatchState(fdr);
 
                 WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
             }
@@ -429,22 +420,6 @@ public class Plugin
         }
 
         CreateHoldItem(fdr, holdSegment, holdExitTime);
-    }
-
-    /// <summary>
-    ///     Update the hold data for the Harmony patches from the hold item. The patches set the
-    ///     ETO of the hold point to the hold exit time.
-    /// </summary>
-    void UpdateHoldPatchState(FDP2.FDR fdr)
-    {
-        var hold = _holdRepository.Find(fdr.Callsign);
-        if (hold is null || !TryParseHoldAnnotation(fdr, out _, out _))
-        {
-            HoldPatches.Remove(fdr);
-            return;
-        }
-
-        HoldPatches.Set(fdr, new HoldPatchState(hold.HoldPoint, hold.HoldExitTime));
     }
 
     // Find the hold-point waypoint on the route. Search forward from the current waypoint first.
@@ -511,6 +486,41 @@ public class Plugin
             State = state,
             HoldEntryTime = entryTime ?? h.HoldEntryTime
         });
+
+        if (state == hold.State)
+            return;
+
+        if (state == HoldItemState.Unconcerned)
+            FreeSlotIfUnused(hold.HoldPoint);
+        else
+            AllocateSlot(hold.HoldPoint);
+    }
+
+    /// <summary>
+    ///     Put the hold point in an empty slot, if no slot has it.
+    /// </summary>
+    void AllocateSlot(string holdPoint)
+    {
+        if (_holdSlotRepository.TryAutoAllocateSlot(holdPoint))
+            WeakReferenceMessenger.Default.Send(new HoldSlotsUpdatedCommand());
+    }
+
+    /// <summary>
+    ///     Free the automatically allocated slot of the hold point, if no aircraft in the
+    ///     handover or jurisdiction state holds at the hold point.
+    /// </summary>
+    void FreeSlotIfUnused(string holdPoint)
+    {
+        var isUsed = _holdRepository.GetHolds()
+            .Any(h => h.HoldPoint == holdPoint && h.State != HoldItemState.Unconcerned);
+        if (isUsed)
+            return;
+
+        if (!_holdSlotRepository.TryFreeAutoAllocatedSlot(holdPoint))
+            return;
+
+        _windowManager.CloseWindow(WindowKeys.HoldFor(holdPoint));
+        WeakReferenceMessenger.Default.Send(new HoldSlotsUpdatedCommand());
     }
 
     // FDR property flags don't cleanly distinguish jurisdiction from incoming/outgoing handoff
@@ -584,9 +594,12 @@ public class Plugin
             fdr.GlobalOpData,
             state);
 
-        var slotAllocated = _holdRepository.Add(holdItem);
-        if (slotAllocated)
-            WeakReferenceMessenger.Default.Send(new HoldSlotsUpdatedCommand());
+        _holdRepository.Add(holdItem);
+
+        if (state != HoldItemState.Unconcerned)
+            AllocateSlot(holdItem.HoldPoint);
+
+        HoldPatches.OnHoldChanged(fdr);
 
         EnsureHoldWindowsAreOpen();
 
@@ -595,19 +608,20 @@ public class Plugin
         return holdItem;
     }
 
-    void UntrackHold(HoldItem hold)
+    void UntrackHold(FDP2.FDR? fdr, HoldItem hold)
     {
-        _holdRepository.TryRemove(hold.Callsign, out var slotFreed);
-        if (slotFreed)
-        {
-            _windowManager.CloseWindow(WindowKeys.HoldFor(hold.HoldPoint));
-            WeakReferenceMessenger.Default.Send(new HoldSlotsUpdatedCommand());
-        }
+        if (!_holdRepository.TryRemove(hold.Callsign))
+            return;
+
+        if (fdr is not null)
+            HoldPatches.OnHoldRemoved(fdr, hold.HoldPoint);
+
+        FreeSlotIfUnused(hold.HoldPoint);
 
         WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
     }
 
-    void UpdateHold(HoldItem hold, int exitTimeMinutes)
+    void UpdateHold(FDP2.FDR fdr, HoldItem hold, int exitTimeMinutes)
     {
         // Keep the existing exit time while the minutes do not change. Otherwise, the exit time
         // moves to the next hour when it is in the past.
@@ -617,13 +631,14 @@ public class Plugin
         var exitTime = CalculateExitTime(exitTimeMinutes);
 
         _holdRepository.Update(hold.Callsign, h => h with { HoldExitTime = exitTime });
+        HoldPatches.OnHoldChanged(fdr);
 
         Debug.WriteLine($"[HOLD DEBUG] Hold updated for {hold.Callsign}, new exit time: {exitTime}");
     }
 
-    void CancelHold(HoldItem hold)
+    void CancelHold(FDP2.FDR? fdr, HoldItem hold)
     {
-        UntrackHold(hold);
+        UntrackHold(fdr, hold);
         Debug.WriteLine($"[HOLD DEBUG] Hold cancelled for {hold.Callsign}");
     }
 
@@ -653,37 +668,14 @@ public class Plugin
 
             try
             {
-                CancelHold(hold);
-
-                // Remove the hold from the label data too. The label data change stops the
-                // patches and resets the estimates, also on the other clients.
                 var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == hold.Callsign);
+                CancelHold(fdr, hold);
+
+                // Remove the hold from the label data too, so that the other clients cancel the
+                // hold.
                 if (fdr is not null)
                     RemoveHoldFromLabel(fdr);
 
-                WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        });
-    }
-
-    public void Receive(RemoveHoldItemCommand message)
-    {
-        _workQueue.Enqueue(async () =>
-        {
-            var hold = _holdRepository.Find(message.Callsign);
-            if (hold == null)
-                return;
-
-            var semaphore = _semaphoreProvider.Get(hold.Callsign);
-            await semaphore.WaitAsync();
-
-            try
-            {
-                UntrackHold(hold);
                 WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
             }
             finally
@@ -748,7 +740,7 @@ public class Plugin
                         try
                         {
                             _holdRepository.Update(holdItem.Callsign, h => h with { HoldExitTime = selectedTime });
-                            UpdateHoldPatchState(fdr);
+                            HoldPatches.OnHoldChanged(fdr);
                             SetExitTimeOnLabel(fdr, selectedTime.Minute);
                             WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
                         }
@@ -854,12 +846,12 @@ public class Plugin
 
     public void Receive(HoldPointAddedCommand message)
     {
-        _holdRepository.TryAllocateSlot(message.Index, message.PointName);
+        _holdSlotRepository.TryAllocateSlot(message.Index, message.PointName);
 
         WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
 
         // Check if there are any aircraft that should still be in OTHER
-        var allocatedNames = GetAllocatedHoldPointNames(_holdRepository.GetSlots());
+        var allocatedNames = GetAllocatedHoldPointNames(_holdSlotRepository.GetSlots());
         var otherHolds = _holdRepository.GetHolds()
             .Where(h => !allocatedNames.Contains(h.HoldPoint) && h.State != HoldItemState.Unconcerned)
             .ToArray();
@@ -875,7 +867,7 @@ public class Plugin
 
     public void Receive(HoldPointRemovedCommand message)
     {
-        if (!_holdRepository.TryFreeSlot(message.PointName))
+        if (!_holdSlotRepository.TryFreeSlot(message.PointName))
             return;
 
         // Close the window for this hold point

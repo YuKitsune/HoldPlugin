@@ -12,7 +12,6 @@ public record ChangeGlobalOpsCommand(string Callsign, string GlobalOps);
 
 public record RefreshHoldsCommand;
 public record HoldSlotsUpdatedCommand;
-public record RemoveHoldItemCommand(string Callsign);
 
 public record HoldPointAddedCommand(int Index, string PointName);
 public record HoldPointRemovedCommand(string PointName);

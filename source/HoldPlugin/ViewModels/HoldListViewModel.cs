@@ -8,6 +8,7 @@ namespace HoldPlugin.ViewModels;
 public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHoldsCommand>
 {
     readonly HoldRepository _holdRepository;
+    readonly HoldSlotRepository _holdSlotRepository;
     readonly IWindowHandle _windowHandle;
     readonly GuiInvoker _guiInvoker;
     
@@ -19,6 +20,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
     public HoldListViewModel()
     {
         _holdRepository = null!;
+        _holdSlotRepository = null!;
         _guiInvoker = null!;
         _windowHandle = null!;
         
@@ -49,9 +51,10 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
     }
 #endif
 
-    public HoldListViewModel(string pointName, HoldItem[] items, HoldRepository holdRepository, IWindowHandle windowHandle, GuiInvoker guiInvoker)
+    public HoldListViewModel(string pointName, HoldItem[] items, HoldRepository holdRepository, HoldSlotRepository holdSlotRepository, IWindowHandle windowHandle, GuiInvoker guiInvoker)
     {
         _holdRepository = holdRepository;
+        _holdSlotRepository = holdSlotRepository;
         _windowHandle = windowHandle;
         _guiInvoker = guiInvoker;
 
@@ -82,7 +85,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
 
     void UpdateItems(IEnumerable<HoldItem> holdItems)
     {
-        var slots = _holdRepository.GetSlots();
+        var slots = _holdSlotRepository.GetSlots();
 
         var relevantHoldItems = holdItems
             .Where(ShouldDisplay)

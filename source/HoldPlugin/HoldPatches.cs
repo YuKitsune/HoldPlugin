@@ -5,18 +5,13 @@ using vatsys;
 namespace HoldPlugin;
 
 /// <summary>
-///     The hold data that the Harmony patches use. The patches run on vatSys threads, thus this
-///     data is kept in a thread-safe dictionary.
-/// </summary>
-public record HoldPatchState(string HoldPoint, DateTime ExitTime);
-
-/// <summary>
 ///     Harmony patches that stop vatSys from moving an aircraft along its route while the
 ///     aircraft is in a hold.
 /// </summary>
 public static class HoldPatches
 {
-    static readonly ConcurrentDictionary<string, HoldPatchState> Holds = new();
+    // The patches run on vatSys threads. The hold repository is thread-safe.
+    static HoldRepository Repository = null!;
 
     // The aircraft that left a hold, but did not cross the hold point again (callsign to hold
     // point name). For these aircraft, the ETO of the hold point is calculated from the radar
@@ -26,43 +21,32 @@ public static class HoldPatches
     // vatSys does not calculate an estimate from radar below this ground speed (knots).
     const double MinimumGroundSpeed = 10;
 
-    public static void Apply(string harmonyId)
+    public static void Apply(string harmonyId, HoldRepository holdRepository)
     {
+        Repository = holdRepository;
+
         var harmony = new Harmony(harmonyId);
         harmony.PatchAll(typeof(HoldPatches).Assembly);
     }
 
-    public static bool TryGet(string callsign, out HoldPatchState holdState)
-    {
-        return Holds.TryGetValue(callsign, out holdState);
-    }
-
     /// <summary>
-    ///     Set the hold data for the FDR. When the hold data changes, process the FDR again, so
-    ///     that vatSys calculates the ETOs again.
+    ///     Call this after a hold for the FDR is added to the hold repository, or after its exit
+    ///     time changes. Process the FDR again, so that vatSys calculates the ETOs again.
     /// </summary>
-    public static void Set(FDP2.FDR fdr, HoldPatchState holdState)
+    public static void OnHoldChanged(FDP2.FDR fdr)
     {
-        if (Holds.TryGetValue(fdr.Callsign, out var currentState) && currentState == holdState)
-            return;
-
-        Holds[fdr.Callsign] = holdState;
         Exits.TryRemove(fdr.Callsign, out _);
         FDP2.Process(fdr);
     }
 
     /// <summary>
-    ///     Remove the hold data for the FDR. Then request an APR, so that vatSys calculates the
-    ///     ETOs again from the current position of the aircraft.
+    ///     Call this after the hold for the FDR is removed from the hold repository. Then request
+    ///     an APR, so that vatSys calculates the ETOs again from the current position of the
+    ///     aircraft.
     /// </summary>
-    public static void Remove(FDP2.FDR fdr)
+    public static void OnHoldRemoved(FDP2.FDR fdr, string holdPoint)
     {
-        // Find the hold point before the hold data is removed.
-        TryGetHoldPointIndex(fdr, out _, out var holdPointIndex);
-
-        if (!Holds.TryRemove(fdr.Callsign, out _))
-            return;
-
+        var holdPointIndex = FindHoldPointIndex(fdr, holdPoint);
         if (holdPointIndex != -1)
             ResetEstimatesFromHoldPoint(fdr, fdr.ParsedRoute[holdPointIndex]);
 
@@ -161,16 +145,10 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     Remove the hold data for the FDRs that vatSys does not have anymore.
+    ///     Remove the exit data for the FDRs that vatSys does not have anymore.
     /// </summary>
     public static void RemoveAllExcept(IReadOnlyCollection<string> callsigns)
     {
-        foreach (var callsign in Holds.Keys.ToArray())
-        {
-            if (!callsigns.Contains(callsign))
-                Holds.TryRemove(callsign, out _);
-        }
-
         foreach (var callsign in Exits.Keys.ToArray())
         {
             if (!callsigns.Contains(callsign))
@@ -178,15 +156,20 @@ public static class HoldPatches
         }
     }
 
-    static bool TryGetHoldPointIndex(FDP2.FDR? fdr, out HoldPatchState holdState, out int holdPointIndex)
+    static bool TryGetHoldPointIndex(FDP2.FDR? fdr, out HoldItem hold, out int holdPointIndex)
     {
         holdPointIndex = -1;
-        holdState = null!;
+        hold = null!;
 
-        if (fdr is null || !Holds.TryGetValue(fdr.Callsign, out holdState))
+        if (fdr is null)
             return false;
 
-        holdPointIndex = FindHoldPointIndex(fdr, holdState.HoldPoint);
+        var foundHold = Repository.Find(fdr.Callsign);
+        if (foundHold is null)
+            return false;
+
+        hold = foundHold;
+        holdPointIndex = FindHoldPointIndex(fdr, hold.HoldPoint);
         return holdPointIndex != -1;
     }
 
@@ -245,9 +228,9 @@ public static class HoldPatches
             {
                 var fdr = __instance.Parent;
 
-                if (TryGetHoldPointIndex(fdr, out var holdState, out var holdPointIndex))
+                if (TryGetHoldPointIndex(fdr, out var hold, out var holdPointIndex))
                 {
-                    SetETOsFromHoldPoint(__instance, holdPointIndex, holdState.ExitTime);
+                    SetETOsFromHoldPoint(__instance, holdPointIndex, hold.HoldExitTime);
                     return;
                 }
 
@@ -320,7 +303,7 @@ public static class HoldPatches
                 return true;
 
             var callsign = rt.CoupledFDR.Callsign;
-            if (!Holds.ContainsKey(callsign) && !Exits.ContainsKey(callsign))
+            if (Repository.Find(callsign) is null && !Exits.ContainsKey(callsign))
                 return true;
 
             __result = false;
