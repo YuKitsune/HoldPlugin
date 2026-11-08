@@ -843,7 +843,7 @@ public class Plugin
 
             try
             {
-                fdr.GlobalOpData = message.GlobalOps;
+                FDP2.SetGlobalOpData(fdr, message.GlobalOps);
             }
             finally
             {
