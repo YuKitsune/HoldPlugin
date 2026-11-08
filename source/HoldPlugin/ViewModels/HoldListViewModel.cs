@@ -7,6 +7,7 @@ namespace HoldPlugin.ViewModels;
 
 public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHoldsCommand>
 {
+    readonly HoldRepository _holdRepository;
     readonly IWindowHandle _windowHandle;
     readonly GuiInvoker _guiInvoker;
     
@@ -17,6 +18,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
     // Designer ctor
     public HoldListViewModel()
     {
+        _holdRepository = null!;
         _guiInvoker = null!;
         _windowHandle = null!;
         
@@ -47,8 +49,9 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
     }
 #endif
 
-    public HoldListViewModel(string pointName, HoldItem[] items, IWindowHandle windowHandle, GuiInvoker guiInvoker)
+    public HoldListViewModel(string pointName, HoldItem[] items, HoldRepository holdRepository, IWindowHandle windowHandle, GuiInvoker guiInvoker)
     {
+        _holdRepository = holdRepository;
         _windowHandle = windowHandle;
         _guiInvoker = guiInvoker;
 
@@ -60,13 +63,13 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
 
     public void Receive(RefreshHoldsCommand message)
     {
-        _guiInvoker.InvokeOnUiThread(_ => Refresh(Plugin.ActiveHolds));
+        _guiInvoker.InvokeOnUiThread(_ => Refresh(_holdRepository.GetHolds()));
     }
 
     // The holds can change between the time the window is requested and the time it is shown.
     public void OnViewLoaded()
     {
-        Refresh(Plugin.ActiveHolds);
+        Refresh(_holdRepository.GetHolds());
     }
 
     void Refresh(IEnumerable<HoldItem> holdItems)
@@ -79,6 +82,8 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
 
     void UpdateItems(IEnumerable<HoldItem> holdItems)
     {
+        var slots = _holdRepository.GetSlots();
+
         var relevantHoldItems = holdItems
             .Where(ShouldDisplay)
             .OrderByDescending(LowestLevel)
@@ -123,7 +128,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
                 return false;
             
             if (string.IsNullOrEmpty(HoldPointName))
-                return !Plugin.HoldLists.Any(d => d.Matches(item.HoldPoint));
+                return !slots.Any(d => d.Matches(item.HoldPoint));
 
             return HoldPointName == item.HoldPoint;
         }
