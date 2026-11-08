@@ -12,10 +12,12 @@ public static class HoldPatches
 {
     // The patches run on vatSys threads. The hold repository is thread-safe.
     static HoldRepository _holds = null!;
+    static IErrorReporter _errorReporter = null!;
 
-    public static void Apply(string harmonyId, HoldRepository holdRepository)
+    public static void Apply(string harmonyId, HoldRepository holdRepository, IErrorReporter errorReporter)
     {
         _holds = holdRepository;
+        _errorReporter = errorReporter;
 
         var harmony = new Harmony(harmonyId);
         harmony.PatchAll(typeof(HoldPatches).Assembly);
@@ -40,7 +42,7 @@ public static class HoldPatches
 
     static int FindHoldPointIndex(FDP2.FDR fdr, string holdPoint)
     {
-        var holdSegment = Plugin.FindHoldWaypoint(fdr, holdPoint);
+        var holdSegment = fdr.FindHoldWaypoint(holdPoint);
         if (holdSegment is null)
             return -1;
 
@@ -86,7 +88,7 @@ public static class HoldPatches
             }
             catch (Exception ex)
             {
-                Plugin.AddError(ex);
+                _errorReporter.ReportError(ex);
             }
         }
     }
@@ -114,7 +116,7 @@ public static class HoldPatches
             }
             catch (Exception ex)
             {
-                Plugin.AddError(ex);
+                _errorReporter.ReportError(ex);
             }
         }
     }
@@ -164,7 +166,7 @@ public static class HoldPatches
             }
             catch (Exception ex)
             {
-                Plugin.AddError(ex);
+                _errorReporter.ReportError(ex);
                 return true;
             }
         }

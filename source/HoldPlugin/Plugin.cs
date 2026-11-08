@@ -69,7 +69,7 @@ public class Plugin
         WeakReferenceMessenger.Default.Register<HoldPointRemovedCommand>(this);
         WeakReferenceMessenger.Default.Register<RefreshHoldsCommand>(this);
 
-        HoldPatches.Apply(Name, _holdRepository);
+        HoldPatches.Apply(Name, _holdRepository, new ErrorReporter());
 
         MMI.SelectedTrackChanged += OnSelectedTrackChanged;
         FDP2.FDRsChanged += OnFDRsChanged;
@@ -370,7 +370,7 @@ public class Plugin
 
     void InitiateHold(FDP2.FDR fdr, string holdPointPrefix, int? exitTimeMinutes)
     {
-        var holdSegment = FindHoldWaypoint(fdr, holdPointPrefix);
+        var holdSegment = fdr.FindHoldWaypoint(holdPointPrefix);
         if (holdSegment is null)
             return;
 
@@ -428,7 +428,7 @@ public class Plugin
 
         // In a hold, vatSys does not set the ATO of the hold point, and HoldPatches records the entry time.
         // The hold point has an ATO only when the hold started after the aircraft crossed the hold point.
-        var holdSegment = FindHoldWaypoint(fdr, hold.HoldPoint);
+        var holdSegment = fdr.FindHoldWaypoint(hold.HoldPoint);
         var entryTime = holdSegment is not null ? GetHoldEntryTime(holdSegment) : null;
 
         // Keep the existing exit time while the minutes do not change. Otherwise, the exit time
@@ -476,46 +476,6 @@ public class Plugin
         }
 
         FreeSlotIfUnused(hold.HoldPoint);
-    }
-
-    // Find the hold-point waypoint on the route. Search forward from the current waypoint first.
-    // Then search backward from the current waypoint, because the aircraft can pass the hold
-    // point (e.g. aircraft is established in the hold, or a handoff is accepted after
-    // overflight). The backward search starts at the current waypoint, so that it does not match
-    // a waypoint at the start of the route before a nearer one.
-    internal static FDP2.FDR.ExtractedRoute.Segment? FindHoldWaypoint(FDP2.FDR fdr, string holdPointPrefix)
-    {
-        var route = fdr.ParsedRoute.ToList();
-        var currentIndex = Math.Max(fdr.ParsedRoute.OverflownIndex, 0);
-
-        var waypointsAhead = route
-            .Skip(currentIndex)
-            .Where(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT)
-            .ToArray();
-
-        var match = FindMatchingWaypoint(waypointsAhead, holdPointPrefix);
-        if (match is not null)
-            return match;
-
-        var waypointsBehind = route
-            .Take(currentIndex)
-            .Where(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT)
-            .Reverse()
-            .ToArray();
-
-        return FindMatchingWaypoint(waypointsBehind, holdPointPrefix);
-        
-        static FDP2.FDR.ExtractedRoute.Segment? FindMatchingWaypoint(
-            FDP2.FDR.ExtractedRoute.Segment[] waypoints,
-            string holdPointPrefix)
-        {
-            var match = waypoints.FirstOrDefault(s => s.Intersection.Name == holdPointPrefix);
-
-            if (match is null && holdPointPrefix.Length >= 3)
-                match = waypoints.FirstOrDefault(s => s.Intersection.Name.StartsWith(holdPointPrefix));
-
-            return match;
-        }
     }
 
     // vatSys sets the ATO to DateTime.MaxValue until the aircraft overflies the hold point.
@@ -572,7 +532,7 @@ public class Plugin
     /// </summary>
     void ResetEstimates(FDP2.FDR fdr, HoldItem hold)
     {
-        var holdSegment = FindHoldWaypoint(fdr, hold.HoldPoint);
+        var holdSegment = fdr.FindHoldWaypoint(hold.HoldPoint);
         if (holdSegment is not null)
         {
             // The hold started after the aircraft crossed the hold point. Remove the position reports
