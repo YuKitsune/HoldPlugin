@@ -7,7 +7,7 @@ namespace HoldPlugin.ViewModels;
 
 public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlotsUpdatedCommand>
 {
-    readonly HoldRepository _holdRepository;
+    readonly HoldSlotRepository _holdSlotRepository;
     readonly GuiInvoker _guiInvoker;
     readonly IErrorReporter _errorReporter;
 
@@ -16,13 +16,13 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
     [ObservableProperty] HoldButtonViewModel _button3;
     [ObservableProperty] HoldButtonViewModel _button4;
 
-    public HoldSetupViewModel(HoldRepository holdRepository, GuiInvoker guiInvoker, IErrorReporter errorReporter)
+    public HoldSetupViewModel(HoldSlotRepository holdSlotRepository, GuiInvoker guiInvoker, IErrorReporter errorReporter)
     {
-        _holdRepository = holdRepository;
+        _holdSlotRepository = holdSlotRepository;
         _guiInvoker = guiInvoker;
         _errorReporter = errorReporter;
 
-        var holds = _holdRepository.GetSlots();
+        var holds = _holdSlotRepository.GetSlots();
 
         Button1 = new HoldButtonViewModel(0, holds[0].GetHoldPointName() ?? string.Empty, this, _errorReporter);
         Button2 = new HoldButtonViewModel(1, holds[1].GetHoldPointName() ?? string.Empty, this, _errorReporter);
@@ -36,7 +36,7 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
     {
         _guiInvoker.InvokeOnUiThread(_ =>
         {
-            var descriptors = _holdRepository.GetSlots();
+            var descriptors = _holdSlotRepository.GetSlots();
             Button1.HoldPointName = descriptors[0].GetHoldPointName();
             Button2.HoldPointName = descriptors[1].GetHoldPointName();
             Button3.HoldPointName = descriptors[2].GetHoldPointName();
