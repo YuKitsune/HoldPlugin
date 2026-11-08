@@ -34,6 +34,9 @@ public class Plugin
 
     // The hold duration to use when the label data has no exit time.
     static readonly TimeSpan DefaultHoldDuration = TimeSpan.FromMinutes(10);
+
+    // vatSys does not calculate an estimate from radar below this ground speed (knots).
+    const double MinimumGroundSpeed = 10;
     
 #if DEBUG
     public const string Name = "Hold Plugin - Debug";
@@ -48,6 +51,7 @@ public class Plugin
 
     readonly HoldRepository _holdRepository = new();
     readonly HoldSlotRepository _holdSlotRepository = new();
+    readonly HoldExitRepository _holdExitRepository = new();
     readonly Dictionary<string, FDP2.FDR> _subscribedFDRs = new();
 
     readonly WindowManager _windowManager;
@@ -70,7 +74,7 @@ public class Plugin
         WeakReferenceMessenger.Default.Register<HoldPointRemovedCommand>(this);
         WeakReferenceMessenger.Default.Register<RefreshHoldsCommand>(this);
 
-        HoldPatches.Apply(Name, _holdRepository);
+        HoldPatches.Apply(Name, _holdRepository, _holdExitRepository);
 
         MMI.SelectedTrackChanged += OnSelectedTrackChanged;
         FDP2.FDRsChanged += OnFDRsChanged;
@@ -196,7 +200,7 @@ public class Plugin
                 if (updated.CoupledFDR is null)
                     return;
 
-                HoldPatches.UpdateExitEstimate(updated.CoupledFDR);
+                UpdateExitEstimate(updated.CoupledFDR);
 
                 var holdItem = _holdRepository.Find(updated.CoupledFDR.Callsign);
                 if (holdItem is not null)
@@ -303,7 +307,7 @@ public class Plugin
         // Sync hold states in case FDR objects were replaced (e.g. after assuming a tag from NONE
         // or accepting a handoff, FDRsChanged fires with a new FDR that already has
         // IsTrackedByMe=true, so no PropertyChanged transition fires for that property).
-        HoldPatches.RemoveAllExcept(_subscribedFDRs.Keys.ToArray());
+        _holdExitRepository.RemoveAllExcept(_subscribedFDRs.Keys.ToArray());
 
         foreach (var fdr in _subscribedFDRs.Values.ToArray())
         {
@@ -464,6 +468,113 @@ public class Plugin
         return match;
     }
 
+    /// <summary>
+    ///     Call this after a hold for the FDR is added to the hold repository, or after its exit
+    ///     time changes. Process the FDR again, so that vatSys calculates the ETOs again.
+    /// </summary>
+    void UpdateHoldEstimates(FDP2.FDR fdr)
+    {
+        _holdExitRepository.Remove(fdr.Callsign);
+        FDP2.Process(fdr);
+    }
+
+    /// <summary>
+    ///     Call this after the hold for the FDR is removed from the hold repository. Then request
+    ///     an APR, so that vatSys calculates the ETOs again from the current position of the
+    ///     aircraft.
+    /// </summary>
+    void ResetHoldEstimates(FDP2.FDR fdr, string holdPoint)
+    {
+        var holdSegment = FindHoldWaypoint(fdr, holdPoint);
+        if (holdSegment is not null)
+            ResetEstimatesFromHoldPoint(fdr, holdSegment);
+
+        // RequestAPR does nothing when the FDR has no coupled track.
+        if (fdr.CoupledTrack is null)
+            FDP2.Process(fdr);
+        else
+            RDP.RequestAPR(fdr);
+    }
+
+    /// <summary>
+    ///     Process the FDR again while the aircraft flies back to the hold point, so that the ETO
+    ///     of the hold point follows the radar position.
+    /// </summary>
+    void UpdateExitEstimate(FDP2.FDR fdr)
+    {
+        if (!_holdExitRepository.Contains(fdr.Callsign))
+            return;
+
+        FDP2.Process(fdr);
+    }
+
+    /// <summary>
+    ///     The aircraft leaves the hold now. Remove the position reports that vatSys made during
+    ///     the hold, and calculate the ETOs again from the hold point.
+    /// </summary>
+    void ResetEstimatesFromHoldPoint(FDP2.FDR fdr, FDP2.FDR.ExtractedRoute.Segment holdSegment)
+    {
+        // The aircraft did not get to the hold point. The ETOs from vatSys are correct.
+        if (holdSegment.ATO == DateTime.MaxValue)
+            return;
+
+        RemovePositionReportsAfter(fdr, holdSegment.ATO);
+
+        if (!TryEstimateFromRadar(fdr, holdSegment, out _))
+        {
+            // There is no radar position. Thus the aircraft leaves the hold point now.
+            holdSegment.ATONoEvent = DateTime.UtcNow;
+        }
+        else
+        {
+            // The aircraft must fly back to the hold point. Remove the ATO, so that vatSys sets
+            // it again when the aircraft crosses the hold point. Until then, the ETO of the hold
+            // point is calculated from the radar position.
+            holdSegment.ATONoEvent = DateTime.MaxValue;
+            _holdExitRepository.Set(fdr.Callsign, holdSegment.Intersection.Name);
+        }
+
+        fdr.ParsedRoute.CalculateETOs(DateTime.UtcNow, fdr.ParsedRoute.IndexOf(holdSegment));
+    }
+
+    // Calculate the ETO of the hold point from the radar position and the ground speed, the same
+    // as vatSys does for an APR.
+    internal static bool TryEstimateFromRadar(FDP2.FDR fdr, FDP2.FDR.ExtractedRoute.Segment holdSegment, out DateTime eto)
+    {
+        eto = DateTime.MaxValue;
+
+        var radarTrack = fdr.CoupledTrack;
+        if (radarTrack is null || radarTrack.GroundSpeed < MinimumGroundSpeed)
+            return false;
+
+        var distance = Conversions.CalculateDistance(radarTrack.LatLong, holdSegment.Intersection.LatLong);
+        eto = DateTime.UtcNow + TimeSpan.FromHours(distance / radarTrack.GroundSpeed);
+        return true;
+    }
+
+    // Remove the APR segments with an ATO after the given time. Add the EET and the distance of
+    // each removed segment to the next segment, the same as vatSys does.
+    static void RemovePositionReportsAfter(FDP2.FDR fdr, DateTime time)
+    {
+        foreach (var segment in fdr.ParsedRoute.ToList())
+        {
+            if (segment.Type != FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.APRUPR)
+                continue;
+
+            if (segment.ATO == DateTime.MaxValue || segment.ATO <= time)
+                continue;
+
+            var index = fdr.ParsedRoute.IndexOf(segment);
+            if (index < 1 || index > fdr.ParsedRoute.Count - 2)
+                continue;
+
+            var nextSegment = fdr.ParsedRoute[index + 1];
+            nextSegment.EET += segment.EET;
+            nextSegment.Distance += segment.Distance;
+            fdr.ParsedRoute.Remove(segment);
+        }
+    }
+
     void UpdateHoldItemFromFDR(FDP2.FDR fdr, HoldItem hold)
     {
         IClearedFlightLevel clearedFlightLevel = fdr.CFLLower <= 0
@@ -599,7 +710,7 @@ public class Plugin
         if (state != HoldItemState.Unconcerned)
             AllocateSlot(holdItem.HoldPoint);
 
-        HoldPatches.OnHoldChanged(fdr);
+        UpdateHoldEstimates(fdr);
 
         EnsureHoldWindowsAreOpen();
 
@@ -614,7 +725,7 @@ public class Plugin
             return;
 
         if (fdr is not null)
-            HoldPatches.OnHoldRemoved(fdr, hold.HoldPoint);
+            ResetHoldEstimates(fdr, hold.HoldPoint);
 
         FreeSlotIfUnused(hold.HoldPoint);
 
@@ -631,7 +742,7 @@ public class Plugin
         var exitTime = CalculateExitTime(exitTimeMinutes);
 
         _holdRepository.Update(hold.Callsign, h => h with { HoldExitTime = exitTime });
-        HoldPatches.OnHoldChanged(fdr);
+        UpdateHoldEstimates(fdr);
 
         Debug.WriteLine($"[HOLD DEBUG] Hold updated for {hold.Callsign}, new exit time: {exitTime}");
     }
@@ -740,7 +851,7 @@ public class Plugin
                         try
                         {
                             _holdRepository.Update(holdItem.Callsign, h => h with { HoldExitTime = selectedTime });
-                            HoldPatches.OnHoldChanged(fdr);
+                            UpdateHoldEstimates(fdr);
                             SetExitTimeOnLabel(fdr, selectedTime.Minute);
                             WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
                         }
