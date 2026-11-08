@@ -416,8 +416,6 @@ public class Plugin
         UpdateEstimates(fdr);
 
         EnsureHoldWindowsAreOpen();
-
-        WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
     }
 
     void UpdateHold(FDP2.FDR fdr, HoldItem hold, int? exitTimeMinutes)
@@ -464,8 +462,6 @@ public class Plugin
                 AllocateSlot(hold.HoldPoint);
             }
         }
-        
-        WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
     }
 
     void CancelHold(FDP2.FDR? fdr, HoldItem hold)
@@ -480,8 +476,6 @@ public class Plugin
         }
 
         FreeSlotIfUnused(hold.HoldPoint);
-
-        WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
     }
 
     // Find the hold-point waypoint on the route. Search forward from the current waypoint first.
@@ -714,6 +708,8 @@ public class Plugin
 
             var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == hold.Callsign);
             CancelHold(fdr, hold);
+
+            WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
         });
     }
 
