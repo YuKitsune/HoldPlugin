@@ -236,6 +236,8 @@ public class Plugin
                 if (updated.CoupledFDR is null)
                     return;
 
+                HoldPatches.UpdateExitEstimate(updated.CoupledFDR);
+
                 var holdItem = _activeHolds.FirstOrDefault(h => h.Callsign == updated.CoupledFDR.Callsign);
                 if (holdItem is not null)
                 {

@@ -18,6 +18,11 @@ public static class HoldPatches
 {
     static readonly ConcurrentDictionary<string, HoldPatchState> Holds = new();
 
+    // The aircraft that left a hold, but did not cross the hold point again (callsign to hold
+    // point name). For these aircraft, the ETO of the hold point is calculated from the radar
+    // position.
+    static readonly ConcurrentDictionary<string, string> Exits = new();
+
     // vatSys does not calculate an estimate from radar below this ground speed (knots).
     const double MinimumGroundSpeed = 10;
 
@@ -42,6 +47,7 @@ public static class HoldPatches
             return;
 
         Holds[fdr.Callsign] = holdState;
+        Exits.TryRemove(fdr.Callsign, out _);
         FDP2.Process(fdr);
     }
 
@@ -68,6 +74,18 @@ public static class HoldPatches
     }
 
     /// <summary>
+    ///     Process the FDR again while the aircraft flies back to the hold point, so that the ETO
+    ///     of the hold point follows the radar position.
+    /// </summary>
+    public static void UpdateExitEstimate(FDP2.FDR fdr)
+    {
+        if (!Exits.ContainsKey(fdr.Callsign))
+            return;
+
+        FDP2.Process(fdr);
+    }
+
+    /// <summary>
     ///     The aircraft leaves the hold now. Remove the position reports that vatSys made during
     ///     the hold, and calculate the ETOs again from the hold point.
     /// </summary>
@@ -79,8 +97,7 @@ public static class HoldPatches
 
         RemovePositionReportsAfter(fdr, holdSegment.ATO);
 
-        var radarTrack = fdr.CoupledTrack;
-        if (radarTrack is null || radarTrack.GroundSpeed < MinimumGroundSpeed)
+        if (!TryEstimateFromRadar(fdr, holdSegment, out _))
         {
             // There is no radar position. Thus the aircraft leaves the hold point now.
             holdSegment.ATONoEvent = DateTime.UtcNow;
@@ -88,16 +105,36 @@ public static class HoldPatches
         else
         {
             // The aircraft must fly back to the hold point. Remove the ATO, so that vatSys sets
-            // it again when the aircraft crosses the hold point. Until then, use a PETO from the
-            // radar position. vatSys does not change the ETO of a PETO when it calculates the ETOs.
-            var distance = Conversions.CalculateDistance(radarTrack.LatLong, holdSegment.Intersection.LatLong);
+            // it again when the aircraft crosses the hold point. Until then, the ETO of the hold
+            // point is calculated from the radar position.
             holdSegment.ATONoEvent = DateTime.MaxValue;
-            holdSegment.IsPETO = true;
-            holdSegment.ETONoEvent = DateTime.UtcNow + TimeSpan.FromHours(distance / radarTrack.GroundSpeed);
+            Exits[fdr.Callsign] = holdSegment.Intersection.Name;
         }
 
-        // The seed time is not used. CalculateETOs uses the ATO or the PETO of the hold point.
         fdr.ParsedRoute.CalculateETOs(DateTime.UtcNow, fdr.ParsedRoute.IndexOf(holdSegment));
+    }
+
+    // Calculate the ETO of the hold point from the radar position and the ground speed, the same
+    // as vatSys does for an APR.
+    static bool TryEstimateFromRadar(FDP2.FDR fdr, FDP2.FDR.ExtractedRoute.Segment holdSegment, out DateTime eto)
+    {
+        eto = DateTime.MaxValue;
+
+        var radarTrack = fdr.CoupledTrack;
+        if (radarTrack is null || radarTrack.GroundSpeed < MinimumGroundSpeed)
+            return false;
+
+        var distance = Conversions.CalculateDistance(radarTrack.LatLong, holdSegment.Intersection.LatLong);
+        eto = DateTime.UtcNow + TimeSpan.FromHours(distance / radarTrack.GroundSpeed);
+        return true;
+    }
+
+    // The aircraft crossed the hold point when the hold point, or a segment after it, has an ATO.
+    // A segment after the hold point gets an ATO when vatSys finds the aircraft on the route after
+    // the hold point.
+    static bool HasCrossedHoldPoint(FDP2.FDR.ExtractedRoute route, int holdPointIndex)
+    {
+        return route.Skip(holdPointIndex).Any(s => s.ATO != DateTime.MaxValue);
     }
 
     // Remove the APR segments with an ATO after the given time. Add the EET and the distance of
@@ -133,6 +170,12 @@ public static class HoldPatches
             if (!callsigns.Contains(callsign))
                 Holds.TryRemove(callsign, out _);
         }
+
+        foreach (var callsign in Exits.Keys.ToArray())
+        {
+            if (!callsigns.Contains(callsign))
+                Exits.TryRemove(callsign, out _);
+        }
     }
 
     static bool TryGetHoldPointIndex(FDP2.FDR? fdr, out HoldPatchState holdState, out int holdPointIndex)
@@ -143,17 +186,55 @@ public static class HoldPatches
         if (fdr is null || !Holds.TryGetValue(fdr.Callsign, out holdState))
             return false;
 
-        var holdSegment = Plugin.FindHoldWaypoint(fdr, holdState.HoldPoint);
-        if (holdSegment is null)
-            return false;
-
-        holdPointIndex = fdr.ParsedRoute.IndexOf(holdSegment);
+        holdPointIndex = FindHoldPointIndex(fdr, holdState.HoldPoint);
         return holdPointIndex != -1;
     }
 
+    static bool TryGetExitHoldPointIndex(FDP2.FDR? fdr, out int holdPointIndex)
+    {
+        holdPointIndex = -1;
+
+        if (fdr is null || !Exits.TryGetValue(fdr.Callsign, out var holdPoint))
+            return false;
+
+        holdPointIndex = FindHoldPointIndex(fdr, holdPoint);
+        return holdPointIndex != -1;
+    }
+
+    static int FindHoldPointIndex(FDP2.FDR fdr, string holdPoint)
+    {
+        var holdSegment = Plugin.FindHoldWaypoint(fdr, holdPoint);
+        if (holdSegment is null)
+            return -1;
+
+        return fdr.ParsedRoute.IndexOf(holdSegment);
+    }
+
+    // Set the ETO of the hold point, then calculate the ETOs of the segments after the hold point
+    // from it.
+    static void SetETOsFromHoldPoint(FDP2.FDR.ExtractedRoute route, int holdPointIndex, DateTime holdPointEto)
+    {
+        var segments = route.ToList();
+        segments[holdPointIndex].ETONoEvent = holdPointEto;
+
+        var eto = holdPointEto;
+        for (var i = holdPointIndex + 1; i < segments.Count; i++)
+        {
+            var segment = segments[i];
+            if (!segment.IsPETO)
+                segment.ETONoEvent = eto + segment.EET;
+
+            eto = segment.ETONoEvent;
+        }
+
+        route.Refresh();
+        route.FirePropertyChanged("ETO");
+    }
+
     /// <summary>
-    ///     Set the ETO of the hold point to the hold exit time. Then calculate the ETOs of the
-    ///     segments after the hold point from the hold exit time.
+    ///     In a hold, set the ETO of the hold point to the hold exit time. After a hold, until the
+    ///     aircraft crosses the hold point, set the ETO of the hold point from the radar position.
+    ///     Then calculate the ETOs of the segments after the hold point from it.
     /// </summary>
     [HarmonyPatch(typeof(FDP2.FDR.ExtractedRoute), nameof(FDP2.FDR.ExtractedRoute.CalculateETOs))]
     static class CalculateETOsPatch
@@ -162,24 +243,28 @@ public static class HoldPatches
         {
             try
             {
-                if (!TryGetHoldPointIndex(__instance.Parent, out var holdState, out var holdPointIndex))
-                    return;
+                var fdr = __instance.Parent;
 
-                var route = __instance.ToList();
-                route[holdPointIndex].ETONoEvent = holdState.ExitTime;
-
-                var eto = holdState.ExitTime;
-                for (var i = holdPointIndex + 1; i < route.Count; i++)
+                if (TryGetHoldPointIndex(fdr, out var holdState, out var holdPointIndex))
                 {
-                    var segment = route[i];
-                    if (!segment.IsPETO)
-                        segment.ETONoEvent = eto + segment.EET;
-
-                    eto = segment.ETONoEvent;
+                    SetETOsFromHoldPoint(__instance, holdPointIndex, holdState.ExitTime);
+                    return;
                 }
 
-                __instance.Refresh();
-                __instance.FirePropertyChanged("ETO");
+                if (fdr is null || !Exits.ContainsKey(fdr.Callsign))
+                    return;
+
+                // The ETOs from vatSys are correct when the aircraft crossed the hold point, or
+                // when the hold point is not on the route anymore.
+                if (!TryGetExitHoldPointIndex(fdr, out var exitHoldPointIndex) ||
+                    HasCrossedHoldPoint(__instance, exitHoldPointIndex))
+                {
+                    Exits.TryRemove(fdr.Callsign, out _);
+                    return;
+                }
+
+                if (TryEstimateFromRadar(fdr, __instance[exitHoldPointIndex], out var eto))
+                    SetETOsFromHoldPoint(__instance, exitHoldPointIndex, eto);
             }
             catch (Exception ex)
             {
@@ -189,8 +274,9 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     Do not let the overflown index go past the hold point. This is necessary when the hold
-    ///     exit time is in the past, but the aircraft is still in the hold.
+    ///     In a hold, do not let the overflown index go past the hold point. This is necessary
+    ///     when the hold exit time is in the past, but the aircraft is still in the hold.
+    ///     After a hold, do not mark the hold point as overflown until the aircraft crosses it.
     /// </summary>
     [HarmonyPatch(typeof(FDP2.FDR.ExtractedRoute), "SetOverflownIndex")]
     static class SetOverflownIndexPatch
@@ -199,13 +285,19 @@ public static class HoldPatches
         {
             try
             {
-                if (!TryGetHoldPointIndex(__instance.Parent, out _, out var holdPointIndex))
+                int maximumOverflownIndex;
+                if (TryGetHoldPointIndex(__instance.Parent, out _, out var holdPointIndex))
+                    maximumOverflownIndex = holdPointIndex;
+                else if (TryGetExitHoldPointIndex(__instance.Parent, out var exitHoldPointIndex) &&
+                         !HasCrossedHoldPoint(__instance, exitHoldPointIndex))
+                    maximumOverflownIndex = exitHoldPointIndex - 1;
+                else
                     return;
 
-                if (__instance.OverflownIndex <= holdPointIndex)
+                if (__instance.OverflownIndex <= maximumOverflownIndex)
                     return;
 
-                __instance.OverflownIndex = holdPointIndex;
+                __instance.OverflownIndex = maximumOverflownIndex;
                 __instance.FirePropertyChanged("OverflownIndex");
             }
             catch (Exception ex)
@@ -216,14 +308,19 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     Do not show a RAM alert for an aircraft in a hold.
+    ///     Do not show a RAM alert for an aircraft in a hold, or for an aircraft that flies back to
+    ///     the hold point after a hold.
     /// </summary>
     [HarmonyPatch(typeof(RDP), "CheckForRAM", typeof(RDP.RadarTrack))]
     static class CheckForRAMPatch
     {
         static bool Prefix(RDP.RadarTrack rt, ref bool __result)
         {
-            if (rt.CoupledFDR is null || !Holds.ContainsKey(rt.CoupledFDR.Callsign))
+            if (rt.CoupledFDR is null)
+                return true;
+
+            var callsign = rt.CoupledFDR.Callsign;
+            if (!Holds.ContainsKey(callsign) && !Exits.ContainsKey(callsign))
                 return true;
 
             __result = false;
