@@ -8,7 +8,6 @@ public record DesignateAircraftCommand(string Callsign);
 public record CancelHoldCommand(string Callsign);
 public record OpenClearedLevelMenuCommand(string Callsign);
 public record OpenHoldExitMenuCommand(string Callsign);
-public record ClearHoldExitTimeCommand(string Callsign);
 public record ChangeGlobalOpsCommand(string Callsign, string GlobalOps);
 
 public record RefreshHoldsCommand;

@@ -29,7 +29,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
                 38000,
                 new ClearedFlightLevel(38000),
                 rvsmApproved: true,
-                DateTime.MaxValue,
+                null,
                 DateTime.Now.AddMinutes(30),
                 "H/RIV",
                 HoldItemState.Jurisdiction)

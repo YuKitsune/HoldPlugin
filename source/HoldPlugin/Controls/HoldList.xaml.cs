@@ -53,18 +53,6 @@ public partial class HoldList : UserControl
         e.Handled = true;
     }
 
-    void HoldExit_MouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ChangedButton != MouseButton.Middle)
-            return;
-
-        if (sender is not FrameworkElement { DataContext: HoldItemViewModel viewModel })
-            return;
-
-        viewModel.ClearHoldExitTimeCommand.Execute(null);
-        e.Handled = true;
-    }
-
     void GlobalOps_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: HoldItemViewModel viewModel })

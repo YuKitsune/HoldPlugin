@@ -5,8 +5,8 @@ namespace HoldPlugin;
 public record HoldItem(
     string Callsign,
     string HoldPoint,
-    DateTime HoldEntryTime,
-    DateTime? HoldExitTime,
+    DateTime? HoldEntryTime,
+    DateTime HoldExitTime,
     bool IsDesignated,
     int Level,
     IClearedFlightLevel ClearedFlightLevel,

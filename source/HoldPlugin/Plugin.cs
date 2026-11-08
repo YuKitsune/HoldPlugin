@@ -25,7 +25,6 @@ public class Plugin
     IRecipient<CancelHoldCommand>,
     IRecipient<OpenClearedLevelMenuCommand>,
     IRecipient<OpenHoldExitMenuCommand>,
-    IRecipient<ClearHoldExitTimeCommand>,
     IRecipient<ChangeGlobalOpsCommand>,
     IRecipient<RemoveHoldItemCommand>,
     IRecipient<HoldPointAddedCommand>,
@@ -66,7 +65,6 @@ public class Plugin
         WeakReferenceMessenger.Default.Register<CancelHoldCommand>(this);
         WeakReferenceMessenger.Default.Register<OpenClearedLevelMenuCommand>(this);
         WeakReferenceMessenger.Default.Register<OpenHoldExitMenuCommand>(this);
-        WeakReferenceMessenger.Default.Register<ClearHoldExitTimeCommand>(this);
         WeakReferenceMessenger.Default.Register<ChangeGlobalOpsCommand>(this);
         WeakReferenceMessenger.Default.Register<RemoveHoldItemCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldPointAddedCommand>(this);
@@ -310,22 +308,18 @@ public class Plugin
 
         foreach (var fdr in _subscribedFDRs.Values.ToArray())
         {
-            UpdateHoldPatchState(fdr);
-
             var existingHold = _holdRepository.Find(fdr.Callsign);
             if (existingHold is not null)
             {
                 UpdateHoldItemFromFDR(fdr, existingHold);
-                continue;
+            }
+            else if (GetHoldItemState(fdr) != HoldItemState.Unconcerned &&
+                     TryParseHoldAnnotation(fdr, out var holdPointPrefix, out var exitTimeMinutes))
+            {
+                InitiateHold(fdr, holdPointPrefix, exitTimeMinutes);
             }
 
-            if (GetHoldItemState(fdr) == HoldItemState.Unconcerned)
-                continue;
-
-            if (!TryParseHoldAnnotation(fdr, out var holdPointPrefix, out var exitTimeMinutes))
-                continue;
-
-            InitiateHold(fdr, holdPointPrefix, exitTimeMinutes);
+            UpdateHoldPatchState(fdr);
         }
 
         WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
@@ -368,8 +362,6 @@ public class Plugin
 
             try
             {
-                UpdateHoldPatchState(fdr);
-
                 var existingHold = _holdRepository.Find(fdr.Callsign);
 
                 if (existingHold != null)
@@ -390,12 +382,6 @@ public class Plugin
                     {
                         UpdateHold(existingHold, exitTimeMinutes.Value);
                     }
-                    else
-                    {
-                        // Hold designator still present but exit-time segment gone; clear the
-                        // in-memory exit time so the label stays the source of truth.
-                        _holdRepository.Update(existingHold.Callsign, h => h with { HoldExitTime = null });
-                    }
 
                     // Update FDR-derived properties
                     UpdateHoldItemFromFDR(fdr, existingHold);
@@ -408,6 +394,8 @@ public class Plugin
                         InitiateHold(fdr, holdPointPrefix, exitTimeMinutes);
                     }
                 }
+
+                UpdateHoldPatchState(fdr);
 
                 WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
             }
@@ -428,50 +416,35 @@ public class Plugin
         if (holdSegment is null)
             return;
 
-        DateTime? holdExitTime = exitTimeMinutes.HasValue
-            ? CalculateExitTime(exitTimeMinutes.Value)
-            : null;
+        DateTime holdExitTime;
+        if (exitTimeMinutes.HasValue)
+        {
+            holdExitTime = CalculateExitTime(exitTimeMinutes.Value);
+        }
+        else
+        {
+            // vatSys sets the ETO to DateTime.MaxValue when it has no estimate.
+            var holdPointEto = holdSegment.ETO == DateTime.MaxValue ? DateTime.UtcNow : holdSegment.ETO;
+            holdExitTime = holdPointEto + DefaultHoldDuration;
+        }
 
         CreateHoldItem(fdr, holdSegment, holdExitTime);
     }
 
     /// <summary>
-    ///     Update the hold data for the Harmony patches from the label data. Do this for each FDR,
-    ///     also when the FDR is not in my jurisdiction, so that each controller sees the same ETOs.
+    ///     Update the hold data for the Harmony patches from the hold item. The patches set the
+    ///     ETO of the hold point to the hold exit time.
     /// </summary>
-    static void UpdateHoldPatchState(FDP2.FDR fdr)
+    void UpdateHoldPatchState(FDP2.FDR fdr)
     {
-        if (!TryParseHoldAnnotation(fdr, out var holdPointPrefix, out var exitTimeMinutes))
+        var hold = _holdRepository.Find(fdr.Callsign);
+        if (hold is null || !TryParseHoldAnnotation(fdr, out _, out _))
         {
             HoldPatches.Remove(fdr);
             return;
         }
 
-        // Keep the hold point and the default exit time of an existing hold. The aircraft can
-        // pass waypoints after the hold point, and the ETO of the hold point is the exit time.
-        if (!HoldPatches.TryGet(fdr.Callsign, out var existingState))
-        {
-            var holdSegment = FindHoldWaypoint(fdr, holdPointPrefix);
-            if (holdSegment is null)
-                return;
-
-            // vatSys sets the ETO to DateTime.MaxValue when it has no estimate.
-            var holdPointEto = holdSegment.ETO == DateTime.MaxValue ? DateTime.UtcNow : holdSegment.ETO;
-            var defaultExitTime = holdPointEto + DefaultHoldDuration;
-            existingState = new HoldPatchState(holdSegment.Intersection.Name, defaultExitTime, defaultExitTime);
-        }
-
-        var exitTime = existingState.DefaultExitTime;
-        if (exitTimeMinutes.HasValue)
-        {
-            // Keep the existing exit time while the minutes do not change. Otherwise, the exit
-            // time moves to the next hour when it is in the past.
-            exitTime = existingState.ExitTime.Minute == exitTimeMinutes.Value
-                ? existingState.ExitTime
-                : CalculateExitTime(exitTimeMinutes.Value);
-        }
-
-        HoldPatches.Set(fdr, existingState with { ExitTime = exitTime });
+        HoldPatches.Set(fdr, new HoldPatchState(hold.HoldPoint, hold.HoldExitTime));
     }
 
     // Find the hold-point waypoint on the route. Search forward from the current waypoint first.
@@ -528,9 +501,7 @@ public class Plugin
         // after the hold item was created. Re-read it so the entry time reflects the actual
         // overflight time once available.
         var holdSegment = FindHoldWaypoint(fdr, hold.HoldPoint);
-        DateTime? entryTime = holdSegment is not null && holdSegment.ATO != default
-            ? holdSegment.ATO
-            : null;
+        var entryTime = holdSegment is not null ? GetHoldEntryTime(holdSegment) : null;
 
         _holdRepository.Update(hold.Callsign, h => h with
         {
@@ -560,6 +531,12 @@ public class Plugin
         };
     }
 
+    // vatSys sets the ATO to the default value until the aircraft overflies the hold point.
+    static DateTime? GetHoldEntryTime(FDP2.FDR.ExtractedRoute.Segment holdSegment)
+    {
+        return holdSegment.ATO != default ? holdSegment.ATO : null;
+    }
+
     static DateTime CalculateExitTime(int exitTimeMinutes)
     {
         // Calculate target exit time based on minutes past the hour
@@ -583,7 +560,7 @@ public class Plugin
     HoldItem CreateHoldItem(
         FDP2.FDR fdr,
         FDP2.FDR.ExtractedRoute.Segment holdSegment,
-        DateTime? holdExitTime)
+        DateTime holdExitTime)
     {
         var selectedCallsign = MMI.SelectedTrack?.GetFDR()?.Callsign;
         var isDesignated = fdr.Callsign == selectedCallsign;
@@ -598,7 +575,7 @@ public class Plugin
         var holdItem = new HoldItem(
             fdr.Callsign,
             holdSegment.Intersection.Name,
-            holdSegment.ATO,
+            GetHoldEntryTime(holdSegment),
             holdExitTime,
             isDesignated,
             level,
@@ -632,9 +609,12 @@ public class Plugin
 
     void UpdateHold(HoldItem hold, int exitTimeMinutes)
     {
-        var exitTime = CalculateExitTime(exitTimeMinutes);
-        if (hold.HoldExitTime == exitTime)
+        // Keep the existing exit time while the minutes do not change. Otherwise, the exit time
+        // moves to the next hour when it is in the past.
+        if (hold.HoldExitTime.Minute == exitTimeMinutes)
             return;
+
+        var exitTime = CalculateExitTime(exitTimeMinutes);
 
         _holdRepository.Update(hold.Callsign, h => h with { HoldExitTime = exitTime });
 
@@ -738,13 +718,11 @@ public class Plugin
             if (fdr is null)
                 return;
 
-            var seedTime = holdItem.HoldExitTime ?? DateTime.UtcNow.AddMinutes(10);
-
-            // TimeMenu window = new TimeMenu(seedTime, TimeSelected: false);
+            // TimeMenu window = new TimeMenu(holdItem.HoldExitTime, TimeSelected: false);
             var window = Activator.CreateInstance(
                 Type.GetType("vatsys.TimeMenu, vatsys"),
                 [
-                    seedTime, // Selected time
+                    holdItem.HoldExitTime, // Selected time
                     false, // bool TimeSelected
                     true, // bool CancelButton
                     -90, // int TimeCountMin = -90
@@ -770,6 +748,7 @@ public class Plugin
                         try
                         {
                             _holdRepository.Update(holdItem.Callsign, h => h with { HoldExitTime = selectedTime });
+                            UpdateHoldPatchState(fdr);
                             SetExitTimeOnLabel(fdr, selectedTime.Minute);
                             WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
                         }
@@ -792,34 +771,6 @@ public class Plugin
         }
     }
 
-    public void Receive(ClearHoldExitTimeCommand message)
-    {
-        var holdItem = _holdRepository.Find(message.Callsign);
-        if (holdItem is null)
-            return;
-
-        var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == message.Callsign);
-        if (fdr is null)
-            return;
-
-        _workQueue.Enqueue(async () =>
-        {
-            var semaphore = _semaphoreProvider.Get(fdr.Callsign);
-            await semaphore.WaitAsync();
-
-            try
-            {
-                _holdRepository.Update(holdItem.Callsign, h => h with { HoldExitTime = null });
-                RemoveExitTimeFromLabel(fdr);
-                WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        });
-    }
-
     /// <summary>
     ///     Remove the hold section (H/XXX or H/XXX/42) from the label data. Keep the other parts
     ///     of the label data. No-op when no hold section is present.
@@ -835,39 +786,6 @@ public class Plugin
             return;
 
         FDP2.SetLabelData(fdr, string.Join(" ", remainingParts));
-    }
-
-    /// <summary>
-    ///     Remove the exit time segment from the hold section of the label data, leaving the
-    ///     hold designation and waypoint name (including any shortening) and separators intact.
-    ///     No-op when no exit time segment is present.
-    /// </summary>
-    void RemoveExitTimeFromLabel(FDP2.FDR fdr)
-    {
-        var parts = fdr.LabelOpData.Split(' ');
-        for (var i = 0; i < parts.Length; i++)
-        {
-            var part = parts[i];
-            if (!part.StartsWith("H/") && !part.StartsWith("H\\"))
-                continue;
-
-            // Separator positions within the hold section ('/' or '\')
-            var separatorIndices = new List<int>();
-            for (var c = 0; c < part.Length; c++)
-            {
-                if (part[c] == '/' || part[c] == '\\')
-                    separatorIndices.Add(c);
-            }
-
-            // Only strip when an exit time segment exists (H/RIVET/42)
-            if (separatorIndices.Count < 2)
-                return;
-
-            // Drop the 2nd separator and everything after it (the exit time)
-            parts[i] = part.Substring(0, separatorIndices[1]);
-            FDP2.SetLabelData(fdr, string.Join(" ", parts));
-            return;
-        }
     }
 
     /// <summary>

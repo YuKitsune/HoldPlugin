@@ -8,7 +8,7 @@ namespace HoldPlugin;
 ///     The hold data that the Harmony patches use. The patches run on vatSys threads, thus this
 ///     data is kept in a thread-safe dictionary.
 /// </summary>
-public record HoldPatchState(string HoldPoint, DateTime ExitTime, DateTime DefaultExitTime);
+public record HoldPatchState(string HoldPoint, DateTime ExitTime);
 
 /// <summary>
 ///     Harmony patches that stop vatSys from moving an aircraft along its route while the
