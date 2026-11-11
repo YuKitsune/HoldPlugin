@@ -146,6 +146,7 @@
                                     <!-- Edit mode -->
                                     <TextBox Text="{Binding GlobalOpsEditValue, UpdateSourceTrigger=PropertyChanged}"
                                              MaxLength="15"
+                                             CharacterCasing="Upper"
                                              HorizontalAlignment="Stretch"
                                              LostFocus="GlobalOpsTextBox_LostFocus"
                                              IsVisibleChanged="GlobalOpsTextBox_IsVisibleChanged"
