@@ -40,7 +40,12 @@
         
             <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" HorizontalAlignment="Center" Text="{Binding WaypointName}"/>
             <TextBlock Grid.Row="1" Grid.Column="0" HorizontalAlignment="Right" Margin="8,0">DLA</TextBlock>
-            <TextBox Grid.Row="1" Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Left" Width="40" Margin="8,0" MaxLength="4" Text="{Binding DelayDuration}" />
+            <TextBox x:Name="DelayDurationTextBox"
+                     Grid.Row="1" Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Left" Width="40" Margin="8,0" MaxLength="4"
+                     Text="{Binding DelayDuration, UpdateSourceTrigger=PropertyChanged}"
+                     PreviewTextInput="DelayDurationTextBox_PreviewTextInput"
+                     PreviewKeyDown="DelayDurationTextBox_PreviewKeyDown"
+                     DataObject.Pasting="DelayDurationTextBox_Pasting" />
         </Grid>
     </Border>
 </UserControl>

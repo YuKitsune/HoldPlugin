@@ -1,5 +1,8 @@
+using System.Collections;
 using System.Reflection;
+using CommunityToolkit.Mvvm.Messaging;
 using HarmonyLib;
+using HoldPlugin.Contracts;
 using vatsys;
 
 namespace HoldPlugin;
@@ -337,6 +340,82 @@ public static class HoldPatches
             {
                 _errorReporter.ReportError(ex);
             }
+        }
+    }
+
+    /// <summary>
+    ///     Open the delay popup when the user right-clicks the ETO of a waypoint on the strip. Do
+    ///     not open it on the hold exit time.
+    /// </summary>
+    [HarmonyPatch]
+    static class StripMouseUpPatch
+    {
+        static readonly FieldInfo ClickspotsField = AccessTools.Field("vatsys.StripPanelDX:clickspots");
+
+        static readonly Type ClickspotType = AccessTools.TypeByName("vatsys.Clickspot");
+        static readonly FieldInfo AreaField = AccessTools.Field(ClickspotType, "Area");
+        static readonly FieldInfo TypeMouseLeftField = AccessTools.Field(ClickspotType, "TypeMouseLeft");
+        static readonly FieldInfo IdField = AccessTools.Field(ClickspotType, "Id");
+        static readonly FieldInfo ValueField = AccessTools.Field(ClickspotType, "Value");
+
+        static readonly MethodInfo AreaContainsMethod = AccessTools.Method(AreaField.FieldType, "Contains", [typeof(float), typeof(float)]);
+        static readonly PropertyInfo SourceFdrProperty = AccessTools.Property("vatsys.Strip:SourceFDR");
+
+        static MethodBase TargetMethod() => AccessTools.Method("vatsys.StripPanelDX:OnMouseUp");
+
+        static void Prefix(object __instance, System.Windows.Forms.MouseEventArgs e)
+        {
+            try
+            {
+                if (e.Button != System.Windows.Forms.MouseButtons.Right)
+                    return;
+
+                var clickspot = FindClickspot(__instance, e.X, e.Y);
+                if (clickspot is null)
+                    return;
+
+                // The strip uses Strip_ETO only for the ETO items.
+                if ((MMI.ClickspotTypes)TypeMouseLeftField.GetValue(clickspot) != MMI.ClickspotTypes.Strip_ETO)
+                    return;
+
+                if (ValueField.GetValue(clickspot) is not FDP2.FDR.ExtractedRoute.Segment segment)
+                    return;
+
+                if (SourceFdrProperty.GetValue(IdField.GetValue(clickspot)) is not FDP2.FDR fdr)
+                    return;
+
+                // On the strip, the hold exit time is on the hold point that is not the arrival copy.
+                var hold = _holds.Find(fdr.Callsign);
+                var isHoldExit = hold is not null &&
+                    segment.Intersection.Name == hold.HoldPoint &&
+                    segment.Tag != PaintStripItemPatch.ArrivalSegmentTag;
+                if (isHoldExit)
+                    return;
+
+                var arrivalTime = segment.ATO != DateTime.MaxValue ? segment.ATO : segment.ETO;
+                if (arrivalTime == DateTime.MaxValue)
+                    return;
+
+                WeakReferenceMessenger.Default.Send(new OpenDelayPopupCommand(fdr.Callsign, segment.Intersection.Name, arrivalTime));
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+            }
+        }
+
+        // Find the clickspot at the mouse position, the same as vatSys does.
+        static object? FindClickspot(object stripPanel, int x, int y)
+        {
+            var clickspots = (IEnumerable)ClickspotsField.GetValue(stripPanel);
+            foreach (var clickspot in clickspots)
+            {
+                var area = AreaField.GetValue(clickspot);
+                if ((bool)AreaContainsMethod.Invoke(area, [(float)x, (float)y]))
+                    return clickspot;
+            }
+
+            return null;
         }
     }
 

@@ -23,6 +23,8 @@ public class Plugin
     IRecipient<OpenClearedLevelMenuCommand>,
     IRecipient<OpenHoldExitMenuCommand>,
     IRecipient<ChangeGlobalOpsCommand>,
+    IRecipient<OpenDelayPopupCommand>,
+    IRecipient<SetHoldDelayCommand>,
     IRecipient<HoldPointAddedCommand>,
     IRecipient<HoldPointRemovedCommand>,
     IRecipient<RefreshHoldsCommand>
@@ -65,6 +67,8 @@ public class Plugin
         WeakReferenceMessenger.Default.Register<OpenClearedLevelMenuCommand>(this);
         WeakReferenceMessenger.Default.Register<OpenHoldExitMenuCommand>(this);
         WeakReferenceMessenger.Default.Register<ChangeGlobalOpsCommand>(this);
+        WeakReferenceMessenger.Default.Register<OpenDelayPopupCommand>(this);
+        WeakReferenceMessenger.Default.Register<SetHoldDelayCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldPointAddedCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldPointRemovedCommand>(this);
         WeakReferenceMessenger.Default.Register<RefreshHoldsCommand>(this);
@@ -340,7 +344,7 @@ public class Plugin
         if (existingHold is null)
         {
             if (hasHoldAnnotation)
-                InitiateHold(fdr, holdPointPrefix, exitTimeMinutes);
+                InitiateHold(fdr, holdPointPrefix, exitTimeMinutes.HasValue ? CalculateExitTime(exitTimeMinutes.Value) : null);
         }
         else if (hasHoldAnnotation)
         {
@@ -354,18 +358,13 @@ public class Plugin
         WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
     }
 
-    void InitiateHold(FDP2.FDR fdr, string holdPointPrefix, int? exitTimeMinutes)
+    void InitiateHold(FDP2.FDR fdr, string holdPointPrefix, DateTime? holdExitTime)
     {
         var holdSegment = fdr.FindHoldWaypoint(holdPointPrefix);
         if (holdSegment is null)
             return;
 
-        DateTime holdExitTime;
-        if (exitTimeMinutes.HasValue)
-        {
-            holdExitTime = CalculateExitTime(exitTimeMinutes.Value);
-        }
-        else
+        if (holdExitTime is null)
         {
             // vatSys sets the ETO to DateTime.MaxValue when it has no estimate.
             var holdPointEto = holdSegment.ETO == DateTime.MaxValue ? DateTime.UtcNow : holdSegment.ETO;
@@ -386,7 +385,7 @@ public class Plugin
             fdr.Callsign,
             holdSegment.Intersection.Name,
             GetHoldEntryTime(holdSegment),
-            holdExitTime,
+            holdExitTime.Value,
             isDesignated,
             level,
             clearedFlightLevel,
@@ -725,6 +724,19 @@ public class Plugin
     }
 
     /// <summary>
+    ///     Add a hold section (H/XXX/42) to the end of the label data.
+    /// </summary>
+    void AddHoldToLabel(FDP2.FDR fdr, string holdPoint, int exitTimeMinutes)
+    {
+        var holdSection = $"H/{holdPoint}/{exitTimeMinutes}";
+        var labelData = string.IsNullOrEmpty(fdr.LabelOpData)
+            ? holdSection
+            : $"{fdr.LabelOpData} {holdSection}";
+
+        FDP2.SetLabelData(fdr, labelData);
+    }
+
+    /// <summary>
     ///     Remove the hold section (H/XXX or H/XXX/42) from the label data. Keep the other parts
     ///     of the label data. No-op when no hold section is present.
     /// </summary>
@@ -792,6 +804,68 @@ public class Plugin
                 return;
 
             FDP2.SetGlobalOps(fdr, message.GlobalOps);
+        });
+    }
+
+    public void Receive(OpenDelayPopupCommand message)
+    {
+        new GuiInvoker(MMI.InvokeOnGUI, _errorReporter.ReportError).InvokeOnUiThread(mainForm =>
+        {
+            var viewModel = new DelayPopupViewModel(message.Callsign, message.WaypointName, message.ArrivalTime);
+            var view = new DelayPopup(viewModel);
+            var form = new PopupForm(view);
+
+            view.CloseRequested += (_, _) => form.Close();
+            form.Shown += (_, _) => view.FocusDelayDuration();
+
+            MMI.EnsureWindowVisible(form);
+            form.Show(mainForm);
+        });
+    }
+
+    /// <summary>
+    ///     Change the exit time if the aircraft already holds at the waypoint. Otherwise, initiate
+    ///     a hold at the waypoint. If the aircraft holds at a different waypoint, cancel that hold first.
+    /// </summary>
+    public void Receive(SetHoldDelayCommand message)
+    {
+        _workQueue.Enqueue(async () =>
+        {
+            try
+            {
+                if (message.HoldExitTime < DateTime.UtcNow)
+                    return;
+
+                var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == message.Callsign);
+                if (fdr is null)
+                    return;
+
+                var existingHold = _holdRepository.Find(message.Callsign);
+                if (existingHold is not null && existingHold.HoldPoint == message.WaypointName)
+                {
+                    _holdRepository.Update(existingHold.Callsign, h => h with { HoldExitTime = message.HoldExitTime });
+                    UpdateEstimates(fdr);
+                    SetExitTimeOnLabel(fdr, message.HoldExitTime.Minute);
+                }
+                else
+                {
+                    if (existingHold is not null)
+                        CancelHold(fdr, existingHold);
+
+                    InitiateHold(fdr, message.WaypointName, message.HoldExitTime);
+
+                    // Add the hold to the label only when the hold started. Otherwise, the
+                    // label change would initiate the hold with the wrong exit time.
+                    if (_holdRepository.Find(message.Callsign) is not null)
+                        AddHoldToLabel(fdr, message.WaypointName, message.HoldExitTime.Minute);
+                }
+
+                WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+            }
         });
     }
 
