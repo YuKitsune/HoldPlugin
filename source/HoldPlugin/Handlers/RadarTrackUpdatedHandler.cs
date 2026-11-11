@@ -24,11 +24,11 @@ public class RadarTrackUpdatedHandler(
                     return;
 
                 var holdItem = holdRepository.Find(updated.CoupledFDR.Callsign);
-                if (holdItem is not null)
-                {
-                    holdRepository.Update(holdItem.Callsign, h => h with { Level = updated.CorrectedAltitude });
-                    holdService.RefreshHolds();
-                }
+                if (holdItem is null)
+                    return;
+
+                holdRepository.Update(holdItem.Callsign, h => h with { Level = updated.CorrectedAltitude });
+                holdService.RefreshHolds();
             }
             catch (Exception ex)
             {
