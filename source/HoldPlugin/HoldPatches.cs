@@ -97,10 +97,10 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     Before the aircraft gets to the hold point, do not mark the hold point as overflown.
-    ///     In the hold, mark the hold point as overflown, but not the segments after it. vatSys
-    ///     does not mark the hold point as overflown, because its ETO is the hold exit time. Also,
-    ///     the aircraft can stay in the hold after the hold exit time.
+    ///     In a hold, do not mark the hold point as overflown. This is necessary when the hold
+    ///     exit time is in the past, but the aircraft is still in the hold. The graphical route
+    ///     starts at the aircraft position and goes to the segment after the overflown index, thus
+    ///     it shows the hold point.
     /// </summary>
     [HarmonyPatch(typeof(FDP2.FDR.ExtractedRoute), "SetOverflownIndex")]
     static class SetOverflownIndexPatch
@@ -109,17 +109,14 @@ public static class HoldPatches
         {
             try
             {
-                if (!TryGetHoldPointIndex(__instance.Parent, out var hold, out var holdPointIndex))
+                if (!TryGetHoldPointIndex(__instance.Parent, out _, out var holdPointIndex))
                     return;
 
-                var overflownIndex = hold.HoldEntryTime is null
-                    ? Math.Min(__instance.OverflownIndex, holdPointIndex - 1)
-                    : holdPointIndex;
-
-                if (__instance.OverflownIndex == overflownIndex)
+                var maximumOverflownIndex = holdPointIndex - 1;
+                if (__instance.OverflownIndex <= maximumOverflownIndex)
                     return;
 
-                __instance.OverflownIndex = overflownIndex;
+                __instance.OverflownIndex = maximumOverflownIndex;
                 __instance.FirePropertyChanged("OverflownIndex");
             }
             catch (Exception ex)
@@ -164,12 +161,7 @@ public static class HoldPatches
                         return true;
 
                     if (segmentIndex == holdPointIndex)
-                    {
                         _holds.Update(fdr.Callsign, h => h with { HoldEntryTime = h.HoldEntryTime ?? DateTime.UtcNow });
-
-                        // Calculate the overflown index again, so that the hold point is overflown.
-                        FDP2.Process(fdr);
-                    }
 
                     return false;
                 }
@@ -208,7 +200,8 @@ public static class HoldPatches
 
     /// <summary>
     ///     In a hold, show the hold point two times on the strip. The first time shows the arrival
-    ///     time (ETO or ATO). The second time shows the hold exit time.
+    ///     time (ETO or ATO). The second time shows the hold exit time. When the aircraft is in the
+    ///     hold, the strip starts at the hold point.
     /// </summary>
     [HarmonyPatch]
     static class PaintStripItemPatch
@@ -251,6 +244,12 @@ public static class HoldPatches
                 var stripRoute = route.ToList();
                 stripRoute[holdPointIndex] = exitSegment;
                 stripRoute.Insert(holdPointIndex, arrivalSegment);
+
+                // vatSys starts the strip at the last overflown waypoint. SetOverflownIndexPatch
+                // does not let the hold point become overflown, thus remove the waypoints before it.
+                if (hold.HoldEntryTime is not null)
+                    stripRoute.RemoveRange(0, holdPointIndex);
+
                 route = stripRoute;
             }
             catch (Exception ex)
