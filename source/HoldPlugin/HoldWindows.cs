@@ -88,7 +88,7 @@ public class HoldWindows(
                     $"HOLD {holdPointName} WINDOW",
                     handle =>
                     {
-                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, holdRepository, holdSlotRepository, handle, guiInvoker, mediator);
+                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, holdRepository, holdSlotRepository, handle, guiInvoker, mediator, errorReporter);
                         var view = new HoldList(viewModel);
                         return view;
                     },
@@ -110,7 +110,7 @@ public class HoldWindows(
                 "HOLD OTHER WINDOW",
                 handle =>
                 {
-                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, holdRepository, holdSlotRepository, handle, guiInvoker, mediator);
+                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, holdRepository, holdSlotRepository, handle, guiInvoker, mediator, errorReporter);
                     var view = new HoldList(viewModel);
                     return view;
                 },

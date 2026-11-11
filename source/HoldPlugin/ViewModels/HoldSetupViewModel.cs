@@ -103,7 +103,7 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
         }
 
         [RelayCommand]
-        void CommitEdit()
+        async Task CommitEdit()
         {
             if (!IsEditing)
                 return;
@@ -124,7 +124,14 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
             // If there was a previous hold point, delete it
             if (!string.IsNullOrWhiteSpace(HoldPointName))
             {
-                _ = _mediator.Send(new HoldPointRemovedCommand(HoldPointName));
+                try
+                {
+                    await _mediator.Send(new HoldPointRemovedCommand(HoldPointName));
+                }
+                catch (Exception ex)
+                {
+                    _errorReporter.ReportError(ex);
+                }
             }
 
             // Update the hold point name
@@ -135,7 +142,14 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
             // If the new name is not empty, create the hold list
             if (!string.IsNullOrWhiteSpace(HoldPointName))
             {
-                _ = _mediator.Send(new HoldPointAddedCommand(_index, HoldPointName));
+                try
+                {
+                    await _mediator.Send(new HoldPointAddedCommand(_index, HoldPointName));
+                }
+                catch (Exception ex)
+                {
+                    _errorReporter.ReportError(ex);
+                }
             }
 
             IsEditing = false;

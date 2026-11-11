@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HoldPlugin.Contracts;
 using MediatR;
+using vatSysToolbox;
 
 namespace HoldPlugin.ViewModels;
 
@@ -16,6 +17,7 @@ public enum HoldItemState
 public partial class HoldItemViewModel : ObservableObject
 {
     readonly IMediator _mediator;
+    readonly IErrorReporter _errorReporter;
 
     [ObservableProperty] bool _isDesignated = false;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(DisplayAircraftId))] string _aircraftId = "ACIDDDDD";
@@ -38,9 +40,11 @@ public partial class HoldItemViewModel : ObservableObject
         DateTime holdExitTime,
         string globalOps,
         HoldItemState state,
-        IMediator mediator)
+        IMediator mediator,
+        IErrorReporter errorReporter)
     {
         _mediator = mediator;
+        _errorReporter = errorReporter;
         AircraftId = aircraftId;
         Level = level;
         ClearedFlightLevel = clearedFlightLevel;
@@ -51,9 +55,10 @@ public partial class HoldItemViewModel : ObservableObject
         State = state;
     }
 
-    public HoldItemViewModel(HoldItem item, IMediator mediator)
+    public HoldItemViewModel(HoldItem item, IMediator mediator, IErrorReporter errorReporter)
     {
         _mediator = mediator;
+        _errorReporter = errorReporter;
         AircraftId = item.Callsign;
         IsDesignated = item.IsDesignated;
         Level = item.Level;
@@ -88,27 +93,55 @@ public partial class HoldItemViewModel : ObservableObject
     public string DisplayGlobalOps => GlobalOps.PadRight(15);
 
     [RelayCommand]
-    void DesignateAircraft()
+    async Task DesignateAircraft()
     {
-        _ = _mediator.Send(new DesignateAircraftCommand(AircraftId));
+        try
+        {
+            await _mediator.Send(new DesignateAircraftCommand(AircraftId));
+        }
+        catch (Exception ex)
+        {
+            _errorReporter.ReportError(ex);
+        }
     }
 
     [RelayCommand]
-    void CancelHold()
+    async Task CancelHold()
     {
-        _ = _mediator.Send(new CancelHoldCommand(AircraftId));
+        try
+        {
+            await _mediator.Send(new CancelHoldCommand(AircraftId));
+        }
+        catch (Exception ex)
+        {
+            _errorReporter.ReportError(ex);
+        }
     }
 
     [RelayCommand]
-    void OpenClearedLevelMenu()
+    async Task OpenClearedLevelMenu()
     {
-        _ = _mediator.Send(new OpenClearedLevelMenuCommand(AircraftId));
+        try
+        {
+            await _mediator.Send(new OpenClearedLevelMenuCommand(AircraftId));
+        }
+        catch (Exception ex)
+        {
+            _errorReporter.ReportError(ex);
+        }
     }
 
     [RelayCommand]
-    void OpenHoldExitMenu()
+    async Task OpenHoldExitMenu()
     {
-        _ = _mediator.Send(new OpenHoldExitMenuCommand(AircraftId));
+        try
+        {
+            await _mediator.Send(new OpenHoldExitMenuCommand(AircraftId));
+        }
+        catch (Exception ex)
+        {
+            _errorReporter.ReportError(ex);
+        }
     }
 
     [RelayCommand]
@@ -119,11 +152,19 @@ public partial class HoldItemViewModel : ObservableObject
     }
 
     [RelayCommand]
-    void CommitGlobalOpsEdit()
+    async Task CommitGlobalOpsEdit()
     {
         if (IsEditingGlobalOps)
         {
-            _ = _mediator.Send(new ChangeGlobalOpsCommand(AircraftId, GlobalOpsEditValue));
+            try
+            {
+                await _mediator.Send(new ChangeGlobalOpsCommand(AircraftId, GlobalOpsEditValue));
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+            }
+
             IsEditingGlobalOps = false;
         }
     }

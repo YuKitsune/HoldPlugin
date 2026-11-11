@@ -2,10 +2,11 @@
 using CommunityToolkit.Mvvm.Input;
 using HoldPlugin.Contracts;
 using MediatR;
+using vatSysToolbox;
 
 namespace HoldPlugin.ViewModels;
 
-public partial class DelayPopupViewModel(string callsign, string waypointName, TimeSpan? delay, IMediator mediator) : ObservableObject
+public partial class DelayPopupViewModel(string callsign, string waypointName, TimeSpan? delay, IMediator mediator, IErrorReporter errorReporter) : ObservableObject
 {
     [ObservableProperty] string _waypointName = waypointName;
     [ObservableProperty] string _delayDuration = FormatDuration(delay);
@@ -15,13 +16,20 @@ public partial class DelayPopupViewModel(string callsign, string waypointName, T
     ///     (e.g. 0000) removes the delay.
     /// </summary>
     [RelayCommand]
-    void Submit()
+    async Task Submit()
     {
         var newDelay = ParseDuration(DelayDuration);
         if (newDelay is null || newDelay < TimeSpan.Zero)
             return;
 
-        _ = mediator.Send(new SetHoldDelayCommand(callsign, WaypointName, newDelay.Value));
+        try
+        {
+            await mediator.Send(new SetHoldDelayCommand(callsign, WaypointName, newDelay.Value));
+        }
+        catch (Exception ex)
+        {
+            errorReporter.ReportError(ex);
+        }
     }
 
     // The format is HHMM.

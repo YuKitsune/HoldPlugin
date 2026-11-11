@@ -9,14 +9,33 @@ namespace HoldPlugin.Handlers;
 /// <summary>
 ///     Open the hold lists that have holds, and tell the open hold lists to show the holds again.
 /// </summary>
-public class RefreshHoldsHandler(HoldWindows holdWindows, WorkQueue workQueue) : INotificationHandler<RefreshHoldsCommand>
+public class RefreshHoldsHandler(HoldWindows holdWindows, WorkQueue workQueue, IErrorReporter errorReporter)
+    : INotificationHandler<RefreshHoldsCommand>
 {
     public Task Handle(RefreshHoldsCommand notification, CancellationToken cancellationToken)
     {
-        // The hold list view models are not MediatR handlers.
-        WeakReferenceMessenger.Default.Send(notification);
+        try
+        {
+            // The hold list view models are not MediatR handlers.
+            WeakReferenceMessenger.Default.Send(notification);
+        }
+        catch (Exception ex)
+        {
+            errorReporter.ReportError(ex);
+        }
 
-        workQueue.Enqueue(async () => holdWindows.EnsureHoldWindowsAreOpen());
+        workQueue.Enqueue(async () =>
+        {
+            try
+            {
+                holdWindows.EnsureHoldWindowsAreOpen();
+            }
+            catch (Exception ex)
+            {
+                errorReporter.ReportError(ex);
+            }
+        });
+
         return Task.CompletedTask;
     }
 }

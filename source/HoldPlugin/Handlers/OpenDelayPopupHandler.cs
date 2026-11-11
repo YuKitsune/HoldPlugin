@@ -3,17 +3,19 @@ using HoldPlugin.Controls;
 using HoldPlugin.ViewModels;
 using MediatR;
 using vatsys;
+using vatSysToolbox;
 using vatSysToolbox.Windows;
 
 namespace HoldPlugin.Handlers;
 
-public class OpenDelayPopupHandler(IGuiInvoker guiInvoker, IMediator mediator) : IRequestHandler<OpenDelayPopupCommand>
+public class OpenDelayPopupHandler(IGuiInvoker guiInvoker, IMediator mediator, IErrorReporter errorReporter)
+    : IRequestHandler<OpenDelayPopupCommand>
 {
     public Task Handle(OpenDelayPopupCommand request, CancellationToken cancellationToken)
     {
         guiInvoker.InvokeOnGUI(mainForm =>
         {
-            var viewModel = new DelayPopupViewModel(request.Callsign, request.WaypointName, request.Delay, mediator);
+            var viewModel = new DelayPopupViewModel(request.Callsign, request.WaypointName, request.Delay, mediator, errorReporter);
             var view = new DelayPopup(viewModel);
             var form = new PopupForm(view);
 

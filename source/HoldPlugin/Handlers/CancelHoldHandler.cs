@@ -6,21 +6,32 @@ using vatSysToolbox.Windows;
 
 namespace HoldPlugin.Handlers;
 
-public class CancelHoldHandler(HoldRepository holdRepository, HoldService holdService, WorkQueue workQueue)
+public class CancelHoldHandler(
+    HoldRepository holdRepository,
+    HoldService holdService,
+    WorkQueue workQueue,
+    IErrorReporter errorReporter)
     : IRequestHandler<CancelHoldCommand>
 {
     public Task Handle(CancelHoldCommand request, CancellationToken cancellationToken)
     {
         workQueue.Enqueue(async () =>
         {
-            var hold = holdRepository.Find(request.Callsign);
-            if (hold == null)
-                return;
+            try
+            {
+                var hold = holdRepository.Find(request.Callsign);
+                if (hold == null)
+                    return;
 
-            var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == hold.Callsign);
-            holdService.CancelHold(fdr, hold);
+                var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == hold.Callsign);
+                holdService.CancelHold(fdr, hold);
 
-            holdService.RefreshHolds();
+                holdService.RefreshHolds();
+            }
+            catch (Exception ex)
+            {
+                errorReporter.ReportError(ex);
+            }
         });
 
         return Task.CompletedTask;
