@@ -157,6 +157,12 @@
                                         <TextBox.Style>
                                             <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
                                                 <Setter Property="Visibility" Value="Collapsed"/>
+
+                                                <!-- Do not make the strip taller. The bevel goes into the margin of the strip,
+                                                     and the text has the same line height as the global ops text. -->
+                                                <Setter Property="Margin" Value="0,-2"/>
+                                                <Setter Property="TextBlock.LineStackingStrategy" Value="BlockLineHeight"/>
+                                                <Setter Property="TextBlock.LineHeight" Value="{Binding Source={x:Static toolbox:VatSysFont.Size}, Converter={StaticResource FontSizeToLineHeightConverter}}"/>
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding IsEditingGlobalOps}" Value="True">
                                                         <Setter Property="Visibility" Value="Visible"/>
