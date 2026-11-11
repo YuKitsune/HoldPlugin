@@ -30,14 +30,14 @@ Ensure you have [vatSys](https://virtualairtrafficsystem.com/) version 1.4.20 or
 
 A **delay** is a time that the aircraft stays at a waypoint on its route. The pilot gives the delay in the flight plan remarks with a `DLE/` remark (e.g. `DLE/TARAL0020` for 20 minutes at `TARAL`). Pilots usually use a delay for aerial work, such as survey or training flights that stay in one area before they continue on their route.
 
-A delay is only advisory. The plugin adds the delay to the departure time at the waypoint, and to the `ETO`s of all the waypoints after it. A flight plan track (with no radar track) stays at the waypoint until the departure time. After the departure time, it continues along its route automatically. A delay does not stop a radar track, and the hold list does not show an aircraft with only a delay.
+The plugin adds the delay to the arrival time at the waypoint, and to the `ETO`s of all the waypoints after it. A flight plan track (with no radar track) stays at the waypoint until the departure time. After the departure time, it continues along its route automatically. A delay does not stop a radar track, and the hold list does not show an aircraft with only a delay. A delay does not inhibit alerts.
 
 A **hold** is similar to a delay, but it is initiated by ATC. The plugin adds the hold duration to the `ETO`s in the same way as a delay.
 Holds differ from delays, in that:
 
 - The hold list shows the aircraft.
 - vatSys does not move the aircraft along its route past the hold point. The radar track or the flight plan track stays at the hold point.
-- vatSys does not show a RAM alert when the aircraft is in the hold.
+- The plugin inhibits RAM, STCA, DAIW, and MSAW alerts for the aircraft.
 
 A hold does not stop automatically, also after the departure time. The hold continues until the controller terminates it.
 

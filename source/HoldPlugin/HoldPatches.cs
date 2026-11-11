@@ -684,4 +684,104 @@ public static class HoldPatches
             return false;
         }
     }
+
+    // The aircraft got to the hold point, and the hold did not terminate yet.
+    static bool IsInHold(FDP2.FDR? fdr) => fdr is not null && _holds.Find(fdr.Callsign)?.HoldEntryTime is not null;
+
+    /// <summary>
+    ///     Do not show a DAIW alert for an aircraft in a hold. vatSys then removes the alert.
+    /// </summary>
+    [HarmonyPatch(typeof(RDP), "CheckForDAIW")]
+    static class CheckForDAIWPatch
+    {
+        static bool Prefix(RDP.RadarTrack rt, ref bool __result)
+        {
+            if (!IsInHold(rt.CoupledFDR))
+                return true;
+
+            __result = false;
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     Do not show an MSAW alert for an aircraft in a hold. vatSys then removes the alert.
+    /// </summary>
+    [HarmonyPatch(typeof(RDP), "CheckForMSAW")]
+    static class CheckForMSAWPatch
+    {
+        static bool Prefix(RDP.RadarTrack rt, ref bool __result)
+        {
+            if (!IsInHold(rt.CoupledFDR))
+                return true;
+
+            __result = false;
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     Do not show an STCA alert for an aircraft in a hold. For an aircraft in a hold,
+    ///     remove its STCA alerts and do not check for conflicts. The other aircraft also check
+    ///     for conflicts with it, thus <see cref="AddAlertPatch"/> stops these alerts.
+    /// </summary>
+    [HarmonyPatch(typeof(RDP), "CheckForSTCA")]
+    static class CheckForSTCAPatch
+    {
+        static readonly Type AlertsType = AccessTools.TypeByName("vatsys.Alerts");
+        static readonly FieldInfo InstanceField = AccessTools.Field(AlertsType, "Instance");
+        static readonly MethodInfo RemoveAlertsMethod = AccessTools.Method(AlertsType, "RemoveAlerts", [typeof(Track), typeof(AlertTypes)]);
+
+        static bool Prefix(RDP.RadarTrack rt)
+        {
+            try
+            {
+                if (!IsInHold(rt.CoupledFDR))
+                    return true;
+
+                var track = MMI.FindTrack(rt);
+                if (track is not null)
+                    RemoveAlertsMethod.Invoke(InstanceField.GetValue(null), [track, AlertTypes.STCA]);
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Do not add an STCA alert with an aircraft in a hold.
+    /// </summary>
+    [HarmonyPatch]
+    static class AddAlertPatch
+    {
+        static readonly Type AlertType = AccessTools.TypeByName("vatsys.Alert");
+        static readonly PropertyInfo TypeProperty = AccessTools.Property(AlertType, "Type");
+        static readonly PropertyInfo TrackProperty = AccessTools.Property(AlertType, "Track");
+        static readonly PropertyInfo Track2Property = AccessTools.Property(AlertType, "Track2");
+
+        static MethodBase TargetMethod() => AccessTools.Method("vatsys.Alerts:AddAlert");
+
+        static bool Prefix(object alert)
+        {
+            try
+            {
+                if ((AlertTypes)TypeProperty.GetValue(alert) != AlertTypes.STCA)
+                    return true;
+
+                var track = (Track?)TrackProperty.GetValue(alert);
+                var track2 = (Track?)Track2Property.GetValue(alert);
+                return !IsInHold(track?.GetFDR()) && !IsInHold(track2?.GetFDR());
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+                return true;
+            }
+        }
+    }
 }
