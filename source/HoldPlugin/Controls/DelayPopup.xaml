@@ -6,7 +6,7 @@
              xmlns:local="clr-namespace:HoldPlugin"
              xmlns:viewModels="clr-namespace:HoldPlugin.ViewModels"
              Background="{x:Static local:Theme.BackgroundColor}"
-             d:DataContext="{d:DesignInstance Type=viewModels:HoldSetupViewModel}"
+             d:DataContext="{d:DesignInstance Type=viewModels:DelayPopupViewModel}"
              mc:Ignorable="d"
              Height="64"
              Width="Auto">
@@ -38,9 +38,9 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
         
-            <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" HorizontalAlignment="Center">RIVET</TextBlock>
+            <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" HorizontalAlignment="Center" Text="{Binding WaypointName}"/>
             <TextBlock Grid.Row="1" Grid.Column="0" HorizontalAlignment="Right" Margin="8,0">DLA</TextBlock>
-            <TextBox Grid.Row="1" Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="8,0" Text="0000"/>
+            <TextBox Grid.Row="1" Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Left" Width="40" Margin="8,0" MaxLength="4" Text="{Binding DelayDuration}" />
         </Grid>
     </Border>
 </UserControl>
