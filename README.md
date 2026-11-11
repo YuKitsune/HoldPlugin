@@ -18,11 +18,14 @@
 
 ### Initiating a Hold
 
-To initiate a hold, enter the hold details into the Label Data.
-The hold information should be formatted as `H\RIVET`, where `RIVET` is the name of the holding waypoint.
-The waypoint name can be shortened to as little as three characters (e.g. `H/RIV`).
+A hold can be initiated in one of two ways:
+1. Select the aircraft, move your mouse to the position you want them to hold, and press the `F8` key.
+2. Right-click on the ETO field in the strip, enter the hold duration (in `HHMM` format), then press `ENTER`.
 
-An exit time can be specified by appending it to the holding point name, e.g. `H\RIVET\29` to depart `RIVET` at 29-minutes past the hour.
+> [NOTE]
+> For compatibility with older older versions of the plugin, holds can also be initiated by typing `H\RIVET` into the label data, where `RIVET` is the name of the holding waypoint.
+> The waypoint name can be shortened to as little as three characters (e.g. `H/RIV`).
+> An exit time can be specified by appending it to the holding point name, e.g. `H\RIVET\29` to depart `RIVET` at 29-minutes past the hour.
 
 ### Hold List
 
@@ -34,15 +37,24 @@ When a block clearance has been issued, the CFL is displayed as `xxxByyy`, where
 
 An `X` will be displayed if the aircraft is non-RVSM.
 
-The hold entry and exit times are displayed in the label. The exit can be adjusted by clicking on it to select a new exit time, or cleared by middle-clicking it.
+The hold entry and exit times are displayed in the label. The exit can be adjusted by clicking on it to select a new exit time.
 
 The `OP_DATA` can also be viewed and edited from the hold label.
 
 ![Hold Diagram](./hold-diagram.png)
 
+### Modifying a hold
+
+The hold can be modified in a few different ways:
+1. Right-click the ETO field of the hold point, and adjust the hold duration (in `HHMM` format), then press `ENTER`.
+2. Left-click the hold exit time in the Hold List, and select a new exit time.
+
 ### Terminating a Hold
 
-The hold can be cancelled by middle-clicking the ACID in the hold list, or by removing the details from the Label Data.
+The hold can be cancelled a few different ways:
+1. Middle click the ACID in the hold list
+2. Press the `F8` key with the flight selected
+3. Re-route the flight past the waypoint
 
 ### Configuring Lists
 
@@ -53,6 +65,8 @@ Lists can also be configured manually via `Tools` > `Hold Setup`. Manually confi
 Any aircraft holding at a waypoint when all 4 lists are already occupied will be placed in the `OTHER` list.
 
 ![All Windows](./all-windows.png)
+
+## How it works
 
 ## Installation
 
@@ -65,8 +79,3 @@ Ensure you have [vatSys](https://virtualairtrafficsystem.com/) version 1.4.20 or
    ```
 3. Run `unblock-dlls.bat` (included in the zip) to unblock the DLL files
 4. Open vatSys and confirm `Hold Setup` appears under the `Tools` menu
-
-## Limitations
-
-- The hold exit time is purely informational, and does not affect the estimates of subsequent waypoints.
-- Hold data is not extracted from the flight plan, the list will only display when the label data contains hold information.
