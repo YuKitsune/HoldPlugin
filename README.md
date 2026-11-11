@@ -54,7 +54,7 @@ To change a delay, right-click the ETO of the waypoint in the strip (the arrival
 
 To initiate a hold, select the aircraft, place your mouse cursor on the position where the aircraft must hold, then press `F8`.
 
-- If the cursor is near a waypoint on the route, the hold is at that waypoint.
+- If the cursor is near a waypoint on the route, the hold initiated at that waypoint.
 - If the cursor is not near a waypoint on the route, the aircraft is re-routed to the cursor position to hold there.
 
 The hold has a default length of 10 minutes.
@@ -97,7 +97,7 @@ To finish a hold, either:
 
 When a hold terminates:
 
-- If the aircraft is in the hold, or the hold point is the next waypoint, the plugin adds a position report at the current position of the aircraft, and vatSys calculates the `ETO`s again from it. Thus the `ETO`s start at the actual time that the aircraft leaves the hold, and vatSys does not show a RAM alert. A flight plan track then continues along its route from the hold point.
+- If the aircraft is in the hold, or the hold point is the next waypoint, the plugin adds a position report at the current position of the aircraft, and vatSys calculates the `ETO`s again from it. Thus the `ETO`s start at the actual time that the aircraft leaves the hold. A flight plan track then continues along its route from the hold point.
 - The aircraft is removed from hold list. If no other aircraft hold at that waypoint, the plugin frees the list (only for a list that the plugin created automatically).
 
 ### Configuring Lists

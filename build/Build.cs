@@ -289,7 +289,6 @@ class Build : FalloutBuild
         .Requires(() => Configuration == Configuration.Release)
         .Executes(() =>
         {
-            var dpiAwareFixScript = RootDirectory / "dpiawarefix.bat";
             var unblockDllsScript = RootDirectory / "unblock-dlls.bat";
 
             PluginPackageDirectory.CreateOrCleanDirectory();
@@ -300,7 +299,6 @@ class Build : FalloutBuild
                 absolutePath.CopyToDirectory(PluginPackageDirectory, ExistsPolicy.MergeAndOverwrite);
             }
 
-            dpiAwareFixScript.CopyToDirectory(PluginPackageDirectory, ExistsPolicy.FileOverwrite);
             unblockDllsScript.CopyToDirectory(PluginPackageDirectory, ExistsPolicy.FileOverwrite);
 
             if (PluginZipPath.FileExists())
