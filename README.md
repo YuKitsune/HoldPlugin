@@ -16,6 +16,15 @@
 
 ## Usage
 
+### Delays and Holds
+
+The plugin uses two items in the remarks of the flight plan:
+
+- A **delay** (`DLE/`) typically comes from the pilot (e.g. for aerial work). A delay is only advisory. The plugin uses the delay to calculate the departure time at the waypoint, and the ETOs after it. vatSys continues to move the aircraft along its route past the waypoint. The hold list does not show aircraft with a delay at a waypoint.
+- A **hold** (`HLD/`) comes from the controller. The plugin also uses the hold to calculate the departure time at the waypoint, the same as a delay. vatSys does not move the aircraft along its route past the hold point until the hold stops. The hold list will show aircraft with a hold in the remarks.
+
+See [How it works](#how-it-works) for the format.
+
 ### Initiating a Hold
 
 You can initiate a hold in one of these ways:
@@ -23,47 +32,43 @@ You can initiate a hold in one of these ways:
 1. Select the aircraft, put the mouse cursor on the position where the aircraft must hold, then press `F8`.
    - If the cursor is near a waypoint on the route, the hold is at that waypoint.
    - If the cursor is not near a waypoint on the route, the aircraft goes direct to the cursor position, holds there, then goes to the waypoint on the route that is nearest to the hold.
-   - The hold has a default delay of 10 minutes.
-2. Right-click the ETO of a waypoint in the strip. Type the delay in the `HHMM` format, then press `ENTER`. If you type one or two digits, the plugin uses them as minutes.
+   - The hold has a default length of 10 minutes.
+2. Type `HLD/` in the remarks (see [How it works](#how-it-works)).
 
 You can change the `F8` key in `Settings` > `Keyboard`.
 
-A hold shows only when the hold point is the next waypoint.
-If you initiate a hold at a waypoint that is further along the route, the hold starts when the aircraft passes the waypoint before it.
+The hold has an effect on the ETOs as soon as it is in the flight plan.
 
 > [!NOTE]
-> You must have permission to change the flight plan (e.g. you have jurisdiction of the aircraft). If not, the `F8` key and the delay popup do nothing.
+> Only the controller with jurisdiction of the aircraft can initiate, modify, and terminate a hold.
+
+### Changing a Delay
+
+To change a delay, right-click the ETO of the waypoint in the strip (the arrival time or the departure time). Type the delay in the `HHMM` format, then press `ENTER`. If you type one or two digits, the plugin uses them as minutes. This changes the `DLE/` in the remarks.
 
 > [!NOTE]
-> For compatibility with older versions of the plugin, you can also initiate a hold in the label data. Type `H/RIVET` or `H\RIVET`, where `RIVET` is the name of the hold point.
-> You can shorten the waypoint name to three characters (e.g. `H/RIV`).
-> To give an exit time, add the minutes past the hour after the hold point name. For example, `H/RIVET/29` makes the aircraft leave `RIVET` at 29 minutes past the hour. If there is no exit time, the exit time is 10 minutes after the ETO of the hold point.
-> A hold in the label data starts immediately. It does not wait until the hold point is the next waypoint.
+> Only the controller with jurisdiction of the aircraft can modify delays.
 
 ### Strip
 
-When an aircraft holds, the hold point shows two times in the strip:
+When the flight plan has a delay or a hold, the waypoint shows two times in the strip:
 
-- The first time shows the time of arrival at the hold point, with an `A`. Before the aircraft gets to the hold point, this is the ETO. After the aircraft gets to the hold point, this is the ATO.
-- The second time shows the hold exit time, with a `D`.
+- The first time shows the time of arrival at the waypoint, with an `A`. Before the aircraft gets to the waypoint, this is the `ETO`. After the aircraft gets to the waypoint, this is the `ATO`.
+- The second time shows the departure time from the waypoint, with a `D`.
 
 ![Hold Strip](./hold-strip.png)
-
-When the aircraft is in the hold, the strip starts at the hold point.
 
 ### Hold List
 
 ![Hold Window](./hold-list.png)
 
-The hold list shows the flights ordered by their CFL.
+The hold list shows the aircraft with a hold (`HLD/` in the remarks). The hold list shows only the aircraft in the jurisdiction or handover state. It does not show an aircraft with only a delay (`DLE/`).
 
-When a block clearance has been issued, the CFL shows as `xxxByyy`, where `xxx` is the lower level, and `yyy` is the upper level.
+The hold list shows the flights ordered by their `CFL`.
 
-An `X` shows if the aircraft is non-RVSM.
+The strip shows the hold entry and exit times. To change the exit time, click it, then select a new exit time.
 
-The label shows the hold entry and exit times. To change the exit time, click it, then select a new exit time.
-
-You can also see and edit the `OP_DATA` from the hold label.
+You can also see and edit the `CFL` and `OP_DATA` from the hold label.
 
 ![Hold Diagram](./hold-diagram.png)
 
@@ -71,8 +76,8 @@ You can also see and edit the `OP_DATA` from the hold label.
 
 You can change a hold in one of these ways:
 
-1. Right-click the ETO of the hold point in the strip (the arrival time or the exit time). Change the delay in the `HHMM` format, then press `ENTER`.
-2. Click the hold exit time in the hold list, then select a new exit time.
+1. Click the hold exit time in the hold list, then select a new exit time. This changes the `HLD/` in the remarks.
+2. Change the `HLD/` in the remarks.
 
 ### Terminating a Hold
 
@@ -81,12 +86,6 @@ A hold stops in one of these ways:
 1. Middle-click the ACID in the hold list.
 2. Select the aircraft, then press `F8`.
 3. Re-route the aircraft past the hold point.
-4. The hold stops automatically after the exit time.
-
-Methods 1 and 2 remove the delay from the remarks.
-
-> [!NOTE]
-> Methods 3 and 4 apply only to holds that are in the remarks (see [How it works](#how-it-works)). To stop a hold that is only in the label data, remove it from the label data.
 
 ### Configuring Lists
 
@@ -100,19 +99,32 @@ Any aircraft holding at a waypoint when all 4 lists are already occupied will be
 
 ## How it works
 
-The plugin keeps each hold in the remarks of the flight plan, in the standard `DLE/` format: `DLE/[waypoint][HHMM]`, where `HHMM` is the length of the delay. For example, `DLE/TARAL0020` is a delay of 20 minutes at `TARAL`. The plugin also reads a `DLE/` that the pilot put in the flight plan (e.g. for aerial work).
+The plugin keeps the delays and the holds in the remarks of the flight plan:
 
-The remarks can have more than one delay. The plugin uses the first delay along the route from the present position of the aircraft. A delay is active only when its waypoint is the next waypoint.
+- A delay from the pilot uses the standard `DLE/` format: `DLE/[waypoint][HHMM]`, where `HHMM` is the length of the delay. For example, `DLE/TARAL0020` is a delay of 20 minutes at `TARAL`.
+- A hold from the controller uses the same format, with `HLD/`. For example, `HLD/TARAL0020` is a hold of 20 minutes at `TARAL`.
 
-The exit time is the arrival time at the hold point plus the delay. Before the aircraft gets to the hold point, the exit time changes when the ETO changes.
+The remarks can have more than one delay, but only one hold. When you initiate a hold, the new `HLD/` replaces the old one.
 
-While the hold is active:
+### Delays
 
+The plugin uses all the delays along the route after the last `ATO` of the aircraft. A delay does not change the `ETO` of its waypoint. The `ETO`s after the waypoint start at the `ETO` of the waypoint plus the delay. vatSys continues to move the aircraft along its route as usual, and can show a RAM alert.
+
+After vatSys sets an `ATO` at a position after the waypoint, the times already contain the delay, and the plugin stops adding it.
+
+### Holds
+
+The plugin uses the hold when its waypoint is on the route ahead of the aircraft.
+
+The exit time is the arrival time at the hold point plus the length of the hold. Before the aircraft gets to the hold point, the exit time changes when the `ETO` changes.
+
+While the flight plan has a hold:
+
+- vatSys calculates the `ETO`s after the hold point from the exit time.
 - vatSys does not move the aircraft along its route past the hold point.
-- vatSys calculates the ETOs after the hold point from the exit time.
-- vatSys does not show a RAM alert for the aircraft.
+- vatSys does not show a RAM alert for the aircraft when the hold point is the next waypoint, or when the aircraft is in the hold.
 
-If the remarks and the label data do not agree, the plugin uses the remarks.
+If a delay and a hold are at the same waypoint, the plugin uses the hold.
 
 ## Installation
 

@@ -30,13 +30,12 @@ public class Plugin
     IRecipient<ChangeGlobalOpsCommand>,
     IRecipient<OpenDelayPopupCommand>,
     IRecipient<SetHoldDelayCommand>,
-    IRecipient<HoldCompletedCommand>,
     IRecipient<HoldKeyPressedCommand>,
     IRecipient<HoldPointAddedCommand>,
     IRecipient<HoldPointRemovedCommand>,
     IRecipient<RefreshHoldsCommand>
 {
-    // The hold duration to use when the label data has no exit time.
+    // The hold duration that the hold key gives.
     static readonly TimeSpan DefaultHoldDuration = TimeSpan.FromMinutes(10);
 
     // vatSys does not calculate an estimate from radar below this ground speed (knots).
@@ -93,7 +92,6 @@ public class Plugin
         WeakReferenceMessenger.Default.Register<ChangeGlobalOpsCommand>(this);
         WeakReferenceMessenger.Default.Register<OpenDelayPopupCommand>(this);
         WeakReferenceMessenger.Default.Register<SetHoldDelayCommand>(this);
-        WeakReferenceMessenger.Default.Register<HoldCompletedCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldKeyPressedCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldPointAddedCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldPointRemovedCommand>(this);
@@ -260,41 +258,6 @@ public class Plugin
         });
     }
 
-    /// <summary>
-    ///     Find a hold annotation (H/XXX or H/XXX/42) in the label data. This does not match the
-    ///     waypoint to the route.
-    /// </summary>
-    static bool TryParseHoldAnnotation(FDP2.FDR fdr, out string holdPointPrefix, out int? exitTimeMinutes)
-    {
-        holdPointPrefix = string.Empty;
-        exitTimeMinutes = null;
-
-        var parts = fdr.LabelOpData.Split(' ');
-        foreach (var part in parts)
-        {
-            // Valid formats:
-            // H/RIVET or H\RIVET - initiate only
-            // H/RIVET/42 or H\RIVET\42 - can be adopted
-            if (!part.StartsWith("H/") && !part.StartsWith("H\\"))
-                continue;
-
-            var segments = part.Split('/', '\\');
-            if (segments.Length < 2)
-                continue;
-
-            holdPointPrefix = segments[1];
-
-            if (segments.Length >= 3 && int.TryParse(segments[2], out var minutes))
-            {
-                exitTimeMinutes = minutes;
-            }
-
-            return true;
-        }
-
-        return false;
-    }
-
     void OnSelectedTrackChanged(object? sender, EventArgs e)
     {
         _workQueue.Enqueue(async () =>
@@ -358,7 +321,7 @@ public class Plugin
     }
 
     /// <summary>
-    ///     Initiate, adopt, or cancel holds based on the remarks, the label data, and route state.
+    ///     Initiate, adopt, or cancel holds based on the remarks and route state.
     ///     Tracks all holds regardless of jurisdiction.
     /// </summary>
     void OnFDRPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -369,7 +332,6 @@ public class Plugin
         // Only process relevant property changes to avoid queue backlog
         string[] relevantPropertyNames =
         [
-            nameof(FDP2.FDR.LabelOpData),
             nameof(FDP2.FDR.Remarks),
             nameof(FDP2.FDR.GlobalOpData),
             nameof(FDP2.FDR.CFLUpper),
@@ -389,6 +351,10 @@ public class Plugin
             try
             {
                 SyncHold(fdr);
+
+                // The delays (DLE) in the remarks change the ETOs.
+                if (e.PropertyName == nameof(FDP2.FDR.Remarks))
+                    UpdateEstimates(fdr);
             }
             catch (Exception ex)
             {
@@ -397,111 +363,73 @@ public class Plugin
         });
     }
 
+    // A hold that the FDR has in the remarks. HoldPoint is the name of the intersection.
+    record HoldSource(string HoldPoint, TimeSpan Delay);
+
     /// <summary>
-    ///     Initiate, update, or cancel the hold for the FDR, based on its remarks and label data.
-    ///     If the remarks and the label data do not agree, use the remarks.
+    ///     Initiate, update, or cancel the hold for the FDR, based on its remarks.
+    ///     The remarks have only one hold. The delays (DLE) in the remarks are not holds. HoldPatches reads them from the remarks.
     /// </summary>
     void SyncHold(FDP2.FDR fdr)
     {
         var existingHold = _holdRepository.Find(fdr.Callsign);
 
         var delayRemarks = DelayRemarks.Parse(fdr);
-        _holdRepository.ForgetCompletedHolds(fdr.Callsign, delayRemarks.Select(d => d.WaypointName));
 
-        var holdPointPrefix = string.Empty;
-        int? exitTimeMinutes = null;
-        TimeSpan? delay = null;
-        bool hasHold;
-        if (TryFindActiveDelay(fdr, delayRemarks, out var activeDelay, out var delayWaypoint))
-        {
-            hasHold = true;
-            holdPointPrefix = delayWaypoint.Intersection.Name;
-            delay = activeDelay.Delay;
-        }
-        else
-        {
-            hasHold = TryParseHoldAnnotation(fdr, out holdPointPrefix, out exitTimeMinutes) &&
-                !HasDelayAtHoldPoint(fdr, delayRemarks, holdPointPrefix);
-        }
-
-        DateTime? holdExitTime = exitTimeMinutes.HasValue ? CalculateExitTime(exitTimeMinutes.Value) : null;
-
-        if (!hasHold)
+        if (!TryFindHold(fdr, delayRemarks, out var source))
         {
             if (existingHold is not null)
                 RemoveHold(fdr, existingHold);
         }
         else if (existingHold is null)
         {
-            InitiateHold(fdr, holdPointPrefix, holdExitTime, delay);
+            InitiateHold(fdr, source);
         }
-        else if (fdr.FindHoldWaypoint(holdPointPrefix) is { } holdSegment && holdSegment.Intersection.Name != existingHold.HoldPoint)
+        else if (source.HoldPoint != existingHold.HoldPoint)
         {
-            // The hold point changed, e.g. another controller changed the delay in the remarks.
+            // The hold point changed, e.g. another controller changed the hold in the remarks.
             RemoveHold(fdr, existingHold);
-            InitiateHold(fdr, holdPointPrefix, holdExitTime, delay);
+            InitiateHold(fdr, source);
         }
         else
         {
-            UpdateHold(fdr, existingHold, exitTimeMinutes, delay);
+            UpdateHold(fdr, existingHold, source);
         }
 
         WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
     }
 
     /// <summary>
-    ///     Find the delay in the remarks at the next waypoint. A delay is active only when its
-    ///     waypoint is the next waypoint, or the current waypoint in a hold (SetOverflownIndexPatch
-    ///     keeps the hold point as the next waypoint). The first delay along the route from the
-    ///     present position is then always at the next waypoint. Ignore the delays at hold points
-    ///     that the aircraft left.
+    ///     Find the hold (HLD) in the remarks on the route ahead of the aircraft. The remarks have
+    ///     only one hold. In a hold, SetOverflownIndexPatch keeps the hold point ahead of the
+    ///     aircraft.
     /// </summary>
-    bool TryFindActiveDelay(
-        FDP2.FDR fdr,
-        DelayRemark[] delayRemarks,
-        out DelayRemark activeDelay,
-        out FDP2.FDR.ExtractedRoute.Segment delayWaypoint)
+    static bool TryFindHold(FDP2.FDR fdr, DelayRemark[] delayRemarks, out HoldSource source)
     {
-        activeDelay = null!;
-        delayWaypoint = null!;
+        source = null!;
 
-        var nextWaypoint = fdr.ParsedRoute.ToList()
-            .Skip(Math.Max(fdr.ParsedRoute.OverflownIndex + 1, 0))
-            .FirstOrDefault(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT);
-        if (nextWaypoint is null)
+        var holdRemark = delayRemarks.FirstOrDefault(d => d.Type == DelayType.Hold);
+        if (holdRemark is null)
             return false;
 
-        var nextWaypointName = nextWaypoint.GetFlightPlanName();
-        var delayRemark = delayRemarks.FirstOrDefault(d => d.WaypointName == nextWaypointName);
-        if (delayRemark is null || _holdRepository.IsCompleted(fdr.Callsign, delayRemark.WaypointName))
+        var holdSegment = GetWaypointsAhead(fdr).FirstOrDefault(s => s.GetFlightPlanName() == holdRemark.WaypointName);
+        if (holdSegment is null)
             return false;
 
-        activeDelay = delayRemark;
-        delayWaypoint = nextWaypoint;
+        source = new HoldSource(holdSegment.Intersection.Name, holdRemark.Delay);
         return true;
     }
 
-    // When the remarks have a delay at the hold point of the label data, the remarks win, also
-    // when the delay is not active.
-    static bool HasDelayAtHoldPoint(FDP2.FDR fdr, DelayRemark[] delayRemarks, string holdPointPrefix)
+    void InitiateHold(FDP2.FDR fdr, HoldSource source)
     {
-        var holdSegment = fdr.FindHoldWaypoint(holdPointPrefix);
-        return holdSegment is not null && delayRemarks.Any(d => d.WaypointName == holdSegment.GetFlightPlanName());
-    }
-
-    void InitiateHold(FDP2.FDR fdr, string holdPointPrefix, DateTime? holdExitTime, TimeSpan? delay)
-    {
-        var holdSegment = fdr.FindHoldWaypoint(holdPointPrefix);
+        var holdSegment = fdr.FindHoldWaypoint(source.HoldPoint);
         if (holdSegment is null)
             return;
 
-        if (holdExitTime is null)
-        {
-            // vatSys sets the ETO to DateTime.MaxValue when it has no estimate. With a delay,
-            // CalculateETOsPatch calculates the exit time again from the arrival time.
-            var holdPointEto = holdSegment.ETO == DateTime.MaxValue ? DateTime.UtcNow : holdSegment.ETO;
-            holdExitTime = holdPointEto + (delay ?? DefaultHoldDuration);
-        }
+        // vatSys sets the ETO to DateTime.MaxValue when it has no estimate. CalculateETOsPatch
+        // calculates the exit time again from the arrival time.
+        var holdPointEto = holdSegment.ETO == DateTime.MaxValue ? DateTime.UtcNow : holdSegment.ETO;
+        var holdExitTime = holdPointEto + source.Delay;
 
         var selectedCallsign = MMI.SelectedTrack?.GetFDR()?.Callsign;
         var isDesignated = fdr.Callsign == selectedCallsign;
@@ -517,14 +445,14 @@ public class Plugin
             fdr.Callsign,
             holdSegment.Intersection.Name,
             GetHoldEntryTime(holdSegment),
-            holdExitTime.Value,
+            holdExitTime,
             isDesignated,
             level,
             clearedFlightLevel,
             fdr.RVSM,
             fdr.GlobalOpData,
             state,
-            delay);
+            source.Delay);
 
         _holdRepository.Add(holdItem);
 
@@ -536,7 +464,7 @@ public class Plugin
         EnsureHoldWindowsAreOpen();
     }
 
-    void UpdateHold(FDP2.FDR fdr, HoldItem hold, int? exitTimeMinutes, TimeSpan? delay)
+    void UpdateHold(FDP2.FDR fdr, HoldItem hold, HoldSource source)
     {
         IClearedFlightLevel clearedFlightLevel = fdr.CFLLower <= 0
             ? new ClearedFlightLevel(fdr.CFLUpper)
@@ -549,12 +477,8 @@ public class Plugin
         var holdSegment = fdr.FindHoldWaypoint(hold.HoldPoint);
         var entryTime = holdSegment is not null ? GetHoldEntryTime(holdSegment) : null;
 
-        // Keep the existing exit time while the minutes do not change. Otherwise, the exit time
-        // moves to the next hour when it is in the past. With a delay, CalculateETOsPatch
-        // calculates the exit time.
-        var exitTimeChanged = delay is null && exitTimeMinutes.HasValue && hold.HoldExitTime.Minute != exitTimeMinutes.Value;
-        var exitTime = exitTimeChanged ? CalculateExitTime(exitTimeMinutes!.Value) : hold.HoldExitTime;
-        var delayChanged = delay != hold.Delay;
+        // CalculateETOsPatch calculates the exit time from the delay.
+        var delayChanged = source.Delay != hold.Delay;
 
         _holdRepository.Update(hold.Callsign, h => h with
         {
@@ -563,18 +487,17 @@ public class Plugin
             GlobalOps = fdr.GlobalOpData,
             State = state,
             HoldEntryTime = entryTime ?? h.HoldEntryTime,
-            HoldExitTime = exitTime,
-            Delay = delay
+            Delay = source.Delay
         });
 
-        if (exitTimeChanged || delayChanged)
+        if (delayChanged)
         {
             UpdateEstimates(fdr);
         }
 
         if (state == hold.State)
             return;
-        
+
         if (state == HoldItemState.Unconcerned)
         {
             FreeSlotIfUnused(hold.HoldPoint);
@@ -586,7 +509,7 @@ public class Plugin
     }
 
     /// <summary>
-    ///     Stop the hold in the plugin. Do not change the remarks or the label data.
+    ///     Stop the hold in the plugin. Do not change the remarks.
     /// </summary>
     void RemoveHold(FDP2.FDR? fdr, HoldItem hold)
     {
@@ -607,40 +530,38 @@ public class Plugin
     }
 
     /// <summary>
-    ///     Remove the delay at the hold point from the remarks and the hold from the label data,
-    ///     then stop the hold. Without permission, the plugin cannot remove the delay from the
-    ///     remarks, and the delay would initiate the hold again. Then do nothing.
+    ///     Remove the hold at the hold point from the remarks, then stop the hold. Without permission, the plugin cannot remove the hold from the
+    ///     remarks, and the hold would initiate again. Then do nothing.
     /// </summary>
     void CancelHold(FDP2.FDR? fdr, HoldItem hold)
     {
         if (fdr is not null)
         {
             var holdPointName = fdr.FindHoldWaypoint(hold.HoldPoint)?.GetFlightPlanName() ?? hold.HoldPoint;
-            if (DelayRemarks.HasDelay(fdr, holdPointName))
+            if (DelayRemarks.HasDelay(fdr, DelayType.Hold, holdPointName))
             {
                 if (!fdr.HavePermission)
                     return;
 
-                DelayRemarks.Remove(fdr, holdPointName);
+                DelayRemarks.Remove(fdr, DelayType.Hold, holdPointName);
             }
-
-            RemoveHoldFromLabel(fdr);
         }
 
         RemoveHold(fdr, hold);
     }
 
     /// <summary>
-    ///     Set the delay at the waypoint in the remarks, then initiate or update the hold from it.
+    ///     Set the delay or hold at the waypoint in the remarks, then initiate or update the hold.
+    ///     OnFDRPropertyChanged calculates the ETOs again when the remarks change.
     ///     <paramref name="waypointName"/> is the name in the flight plan route. Do nothing when
     ///     the controller does not have permission to change the flight plan.
     /// </summary>
-    void SetDelay(FDP2.FDR fdr, string waypointName, TimeSpan delay)
+    void SetDelay(FDP2.FDR fdr, DelayType type, string waypointName, TimeSpan delay)
     {
         if (!fdr.HavePermission || delay <= TimeSpan.Zero)
             return;
 
-        DelayRemarks.Set(fdr, waypointName, delay);
+        DelayRemarks.Set(fdr, type, waypointName, delay);
         SyncHold(fdr);
     }
 
@@ -648,26 +569,6 @@ public class Plugin
     static DateTime? GetHoldEntryTime(FDP2.FDR.ExtractedRoute.Segment holdSegment)
     {
         return holdSegment.ATO != DateTime.MaxValue ? holdSegment.ATO : null;
-    }
-
-    static DateTime CalculateExitTime(int exitTimeMinutes)
-    {
-        // Calculate target exit time based on minutes past the hour
-        var targetExitTime = new DateTime(
-            DateTime.UtcNow.Year,
-            DateTime.UtcNow.Month,
-            DateTime.UtcNow.Day,
-            DateTime.UtcNow.Hour,
-            exitTimeMinutes,
-            0);
-
-        // If target time is before entry time, it's next hour
-        if (targetExitTime <= DateTime.UtcNow)
-        {
-            targetExitTime = targetExitTime.AddHours(1);
-        }
-
-        return targetExitTime;
     }
 
     // FDR property flags don't cleanly distinguish jurisdiction from incoming/outgoing handoff
@@ -709,11 +610,16 @@ public class Plugin
                 holdSegment.ATONoEvent = DateTime.MaxValue;
             }
 
+            // Before the hold point is the next waypoint, the aircraft is not near the hold point.
+            // vatSys then only calculates the estimates again.
             var didEnterHold = hold.HoldEntryTime is not null;
-            if (!TryAddPositionReportBeforeHoldPoint(fdr, holdSegment) && didEnterHold)
+            if (didEnterHold || fdr.GetNextWaypoint() == holdSegment)
             {
-                // There is no radar position. Thus the aircraft leaves the hold point now, if it got to the hold point.
-                holdSegment.ATONoEvent = DateTime.UtcNow;
+                if (!TryAddPositionReportBeforeHoldPoint(fdr, holdSegment) && didEnterHold)
+                {
+                    // There is no radar position. Thus the aircraft leaves the hold point now, if it got to the hold point.
+                    holdSegment.ATONoEvent = DateTime.UtcNow;
+                }
             }
         }
 
@@ -793,8 +699,8 @@ public class Plugin
     }
 
     /// <summary>
-    ///     Free the automatically allocated slot of the hold point, if no aircraft in the
-    ///     handover or jurisdiction state holds at the hold point.
+    ///     Free the automatically allocated slot of the hold point, if the hold list shows no
+    ///     aircraft at the hold point.
     /// </summary>
     void FreeSlotIfUnused(string holdPoint)
     {
@@ -888,7 +794,7 @@ public class Plugin
                 {
                     _workQueue.Enqueue(async () =>
                     {
-                        // The remarks contain the delay, thus change the exit time to a delay
+                        // The remarks contain the hold, thus change the exit time to a delay
                         // from the arrival time.
                         var hold = _holdRepository.Find(holdItem.Callsign);
                         var holdSegment = hold is not null ? fdr.FindHoldWaypoint(hold.HoldPoint) : null;
@@ -896,7 +802,7 @@ public class Plugin
                             !fdr.TryGetHoldArrivalTime(holdSegment, hold.HoldEntryTime, out var arrivalTime))
                             return;
 
-                        SetDelay(fdr, holdSegment.GetFlightPlanName(), selectedTime - arrivalTime);
+                        SetDelay(fdr, DelayType.Hold, holdSegment.GetFlightPlanName(), selectedTime - arrivalTime);
                     });
                 }
             }
@@ -907,23 +813,6 @@ public class Plugin
         {
             _errorReporter.ReportError(ex);
         }
-    }
-
-    /// <summary>
-    ///     Remove the hold section (H/XXX or H/XXX/42) from the label data. Keep the other parts
-    ///     of the label data. No-op when no hold section is present.
-    /// </summary>
-    void RemoveHoldFromLabel(FDP2.FDR fdr)
-    {
-        var parts = fdr.LabelOpData.Split(' ');
-        var remainingParts = parts
-            .Where(p => !p.StartsWith("H/") && !p.StartsWith("H\\"))
-            .ToArray();
-
-        if (remainingParts.Length == parts.Length)
-            return;
-
-        FDP2.SetLabelData(fdr, string.Join(" ", remainingParts));
     }
 
     public void Receive(ChangeGlobalOpsCommand message)
@@ -964,7 +853,7 @@ public class Plugin
                 if (fdr is null)
                     return;
 
-                SetDelay(fdr, message.WaypointName, message.Delay);
+                SetDelay(fdr, DelayType.Delay, message.WaypointName, message.Delay);
             }
             catch (Exception ex)
             {
@@ -974,26 +863,7 @@ public class Plugin
     }
 
     /// <summary>
-    ///     HoldPatches ended a hold, because the aircraft left the hold point.
-    /// </summary>
-    public void Receive(HoldCompletedCommand message)
-    {
-        _workQueue.Enqueue(async () =>
-        {
-            try
-            {
-                FreeSlotIfUnused(message.HoldPoint);
-                WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
-            }
-            catch (Exception ex)
-            {
-                _errorReporter.ReportError(ex);
-            }
-        });
-    }
-
-    /// <summary>
-    ///     If the aircraft is in a hold, cancel the hold. Otherwise, initiate a hold with the
+    ///     If the aircraft has a hold, cancel the hold. Otherwise, initiate a hold with the
     ///     default delay at the waypoint near the position. If no waypoint ahead is near the
     ///     position, route the aircraft direct to the position, and hold there.
     /// </summary>
@@ -1023,7 +893,7 @@ public class Plugin
                 if (holdPointName is null)
                     return;
 
-                SetDelay(fdr, holdPointName, DefaultHoldDuration);
+                SetDelay(fdr, DelayType.Hold, holdPointName, DefaultHoldDuration);
             }
             catch (Exception ex)
             {

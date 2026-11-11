@@ -1,7 +1,7 @@
 namespace HoldPlugin;
 
 /// <summary>
-///     Stores the active holds, and the completed holds. All access uses one lock, so you can
+///     Stores the active holds. All access uses one lock, so you can
 ///     use this class from all threads. The read methods return copies, and hold items are
 ///     immutable, so callers cannot change the stored data directly.
 /// </summary>
@@ -10,10 +10,6 @@ public class HoldRepository
     readonly object _lock = new();
 
     readonly List<HoldItem> _holds = [];
-
-    // The hold points that the aircraft left at the end of a hold with a delay from the remarks.
-    // The delay stays in the remarks, thus the plugin must not start the hold again.
-    readonly HashSet<(string Callsign, string HoldPoint)> _completedHolds = [];
 
     public HoldItem[] GetHolds()
     {
@@ -64,44 +60,6 @@ public class HoldRepository
         lock (_lock)
         {
             return _holds.RemoveAll(h => h.Callsign == callsign) > 0;
-        }
-    }
-
-    /// <summary>
-    ///     Remove the hold for the callsign, and remember that the aircraft left the hold point.
-    ///     <paramref name="holdPoint"/> is the name of the hold point in the flight plan route.
-    /// </summary>
-    /// <returns><c>true</c> if the hold was removed, otherwise <c>false</c>.</returns>
-    public bool TryComplete(string callsign, string holdPoint)
-    {
-        lock (_lock)
-        {
-            if (_holds.RemoveAll(h => h.Callsign == callsign) == 0)
-                return false;
-
-            _completedHolds.Add((callsign, holdPoint));
-            return true;
-        }
-    }
-
-    public bool IsCompleted(string callsign, string holdPoint)
-    {
-        lock (_lock)
-        {
-            return _completedHolds.Contains((callsign, holdPoint));
-        }
-    }
-
-    /// <summary>
-    ///     Forget the completed holds of the callsign at the hold points that are not in
-    ///     <paramref name="holdPointsToKeep"/>, e.g. when the delay was removed from the remarks.
-    /// </summary>
-    public void ForgetCompletedHolds(string callsign, IEnumerable<string> holdPointsToKeep)
-    {
-        lock (_lock)
-        {
-            var keep = holdPointsToKeep.ToHashSet();
-            _completedHolds.RemoveWhere(c => c.Callsign == callsign && !keep.Contains(c.HoldPoint));
         }
     }
 }

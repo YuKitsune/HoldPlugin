@@ -53,59 +53,77 @@ public static class HoldPatches
         return fdr.ParsedRoute.IndexOf(holdSegment);
     }
 
-    // Set the ETO of the hold point, then calculate the ETOs of the segments after the hold point
-    // from it.
-    static void SetETOsFromHoldPoint(FDP2.FDR.ExtractedRoute route, int holdPointIndex, DateTime holdPointEto)
-    {
-        var segments = route.ToList();
-        segments[holdPointIndex].ETONoEvent = holdPointEto;
-
-        var eto = holdPointEto;
-        for (var i = holdPointIndex + 1; i < segments.Count; i++)
-        {
-            var segment = segments[i];
-            if (!segment.IsPETO)
-                segment.ETONoEvent = eto + segment.EET;
-
-            eto = segment.ETONoEvent;
-        }
-
-        route.Refresh();
-        route.FirePropertyChanged("ETO");
-    }
-
     /// <summary>
-    ///     In a hold, set the ETO of the hold point to the hold exit time. Then calculate the ETOs
-    ///     of the segments after the hold point from it. When the hold has a delay from the remarks,
-    ///     the hold exit time is the arrival time plus the delay.
+    ///     Add the delays (DLE) in the remarks and the hold to the ETOs. A delay does not change
+    ///     the ETO of its waypoint, thus vatSys moves the aircraft past the waypoint as usual. The
+    ///     ETOs after the waypoint start at the ETO plus the delay. In a hold, set the ETO of the
+    ///     hold point to the hold exit time. When the hold has a delay from the remarks, the hold
+    ///     exit time is the arrival time plus the delay.
     /// </summary>
     [HarmonyPatch(typeof(FDP2.FDR.ExtractedRoute), nameof(FDP2.FDR.ExtractedRoute.CalculateETOs))]
     static class CalculateETOsPatch
     {
-        static void Postfix(FDP2.FDR.ExtractedRoute __instance)
+        static void Postfix(FDP2.FDR.ExtractedRoute __instance, int indexPosition)
         {
             try
             {
                 var fdr = __instance.Parent;
-
-                if (!TryGetHoldPointIndex(fdr, out var hold, out var holdPointIndex))
+                var delays = fdr.GetActiveDelays();
+                var hasHold = TryGetHoldPointIndex(fdr, out var hold, out var holdPointIndex);
+                if (!hasHold && delays.Count == 0)
                     return;
 
-                var holdExitTime = hold.HoldExitTime;
-                if (hold.Delay is not null &&
-                    fdr.TryGetHoldArrivalTime(__instance[holdPointIndex], hold.HoldEntryTime, out var arrivalTime))
+                // vatSys calculates the ETOs from indexPosition. In a hold, the hold point can be before it.
+                var segments = __instance.ToList();
+                var startIndex = Math.Max(0, Math.Min(indexPosition, segments.Count - 1));
+                if (hasHold)
+                    startIndex = Math.Min(startIndex, holdPointIndex);
+
+                // The time that the aircraft leaves the previous segment.
+                var departureTime = DateTime.MaxValue;
+                for (var i = startIndex; i < segments.Count; i++)
                 {
-                    holdExitTime = arrivalTime + hold.Delay.Value;
-                    if (holdExitTime != hold.HoldExitTime)
-                        _holds.Update(fdr.Callsign, h => h with { HoldExitTime = holdExitTime });
+                    var segment = segments[i];
+                    if (i > startIndex && !segment.IsPETO && segment.ATO == DateTime.MaxValue)
+                    {
+                        if (departureTime == DateTime.MaxValue)
+                            break;
+
+                        segment.ETONoEvent = departureTime + segment.EET;
+                    }
+
+                    if (hasHold && i == holdPointIndex)
+                    {
+                        departureTime = GetHoldExitTime(fdr, hold, segment);
+                        segment.ETONoEvent = departureTime;
+                        continue;
+                    }
+
+                    var arrivalTime = segment.ATO != DateTime.MaxValue ? segment.ATO : segment.ETO;
+                    departureTime = arrivalTime != DateTime.MaxValue && delays.TryGetValue(i, out var delay)
+                        ? arrivalTime + delay
+                        : arrivalTime;
                 }
 
-                SetETOsFromHoldPoint(__instance, holdPointIndex, holdExitTime);
+                __instance.Refresh();
+                __instance.FirePropertyChanged("ETO");
             }
             catch (Exception ex)
             {
                 _errorReporter.ReportError(ex);
             }
+        }
+
+        static DateTime GetHoldExitTime(FDP2.FDR fdr, HoldItem hold, FDP2.FDR.ExtractedRoute.Segment holdSegment)
+        {
+            if (!fdr.TryGetHoldArrivalTime(holdSegment, hold.HoldEntryTime, out var arrivalTime))
+                return hold.HoldExitTime;
+
+            var holdExitTime = arrivalTime + hold.Delay;
+            if (holdExitTime != hold.HoldExitTime)
+                _holds.Update(fdr.Callsign, h => h with { HoldExitTime = holdExitTime });
+
+            return holdExitTime;
         }
     }
 
@@ -142,8 +160,8 @@ public static class HoldPatches
     /// <summary>
     ///     In a hold, do not let vatSys set ATOs for the hold point, or for the segments after it.
     ///     vatSys can set ATOs for the segments before the hold point. When vatSys finds that the
-    ///     aircraft crossed the hold point, record the hold entry time. A hold with a delay from the
-    ///     remarks ends when vatSys finds the aircraft after the hold point after the exit time.
+    ///     aircraft crossed the hold point, record the hold entry time. The hold continues until
+    ///     the controller cancels it, also after the exit time.
     /// </summary>
     [HarmonyPatch(typeof(RDP), "AutomaticPositionReport")]
     static class AutomaticPositionReportPatch
@@ -164,7 +182,7 @@ public static class HoldPatches
             try
             {
                 var fdr = rt.CoupledFDR;
-                if (fdr is null || !TryGetHoldPointIndex(fdr, out var hold, out var holdPointIndex))
+                if (fdr is null || !TryGetHoldPointIndex(fdr, out _, out var holdPointIndex))
                     return true;
 
                 // vatSys found that the aircraft crossed a waypoint.
@@ -181,38 +199,19 @@ public static class HoldPatches
                         // Calculate the ETOs again. With a delay, the hold exit time is now the
                         // hold entry time plus the delay.
                         FDP2.Process(fdr);
-                        return false;
                     }
 
-                    return TryCompleteHold(fdr, hold, holdPointIndex);
+                    return false;
                 }
 
                 // vatSys adds an APR segment before the route index that it finds.
-                if (FindPositionReportIndex(rt, fdr) <= holdPointIndex)
-                    return true;
-
-                return TryCompleteHold(fdr, hold, holdPointIndex);
+                return FindPositionReportIndex(rt, fdr) <= holdPointIndex;
             }
             catch (Exception ex)
             {
                 _errorReporter.ReportError(ex);
                 return true;
             }
-        }
-
-        // vatSys found the aircraft after the hold point. End a hold with a delay from the remarks
-        // when the exit time has passed. vatSys can then make the position report, and the
-        // aircraft moves along its route again. Returns true if the hold ended.
-        static bool TryCompleteHold(FDP2.FDR fdr, HoldItem hold, int holdPointIndex)
-        {
-            if (hold.Delay is null || DateTime.UtcNow < hold.HoldExitTime)
-                return false;
-
-            if (!_holds.TryComplete(fdr.Callsign, fdr.ParsedRoute[holdPointIndex].GetFlightPlanName()))
-                return false;
-
-            WeakReferenceMessenger.Default.Send(new HoldCompletedCommand(hold.HoldPoint));
-            return true;
         }
 
         // Find the route index that vatSys adds the APR segment before, the same as vatSys does.
@@ -238,14 +237,15 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     In a hold, show the hold point two times on the strip. The first time shows the arrival
-    ///     time (ETO or ATO). The second time shows the hold exit time. When the aircraft is in the
-    ///     hold, the strip starts at the hold point.
+    ///     Show the waypoint of a delay (DLE) or a hold two times on the strip. The first time
+    ///     shows the arrival time (ETO or ATO). The second time shows the departure time: the
+    ///     arrival time plus the delay, or the hold exit time. When the aircraft is in the hold,
+    ///     the strip starts at the hold point.
     /// </summary>
     [HarmonyPatch]
     static class PaintStripItemPatch
     {
-        // Identifies the arrival copy of the hold point on the strip.
+        // Identifies the arrival copy of the waypoint on the strip.
         public static readonly object ArrivalSegmentTag = new();
 
         static MethodBase TargetMethod() => AccessTools.Method("vatsys.StripPanelDX:PaintStripItem");
@@ -255,49 +255,91 @@ public static class HoldPatches
         {
             try
             {
-                var hold = _holds.Find(fdr.Callsign);
-                if (hold is null)
-                    return;
-
-                var holdSegment = fdr.FindHoldWaypoint(hold.HoldPoint);
-                if (holdSegment is null)
-                    return;
-
-                var holdPointIndex = route.IndexOf(holdSegment);
-                if (holdPointIndex == -1)
-                    return;
-
-                if (!fdr.TryGetHoldArrivalTime(holdSegment, hold.HoldEntryTime, out var arrivalTime))
-                    return;
-
-                // After the aircraft gets to the hold point, the arrival time is an ATO.
-                var arrivalSegment = hold.HoldEntryTime is null
-                    ? CreateStripSegment(fdr, holdSegment, arrivalTime, DateTime.MaxValue)
-                    : CreateStripSegment(fdr, holdSegment, DateTime.MaxValue, arrivalTime);
-                arrivalSegment.Tag = ArrivalSegmentTag;
-
-                // The hold point has an ATO when the hold started after the aircraft crossed the
-                // hold point. The strip shows the ATO before the ETO, thus the exit time must go on
-                // a copy of the hold point.
-                var exitSegment = holdSegment.ATO == DateTime.MaxValue
-                    ? holdSegment
-                    : CreateStripSegment(fdr, holdSegment, hold.HoldExitTime, DateTime.MaxValue);
-
                 var stripRoute = route.ToList();
-                stripRoute[holdPointIndex] = exitSegment;
-                stripRoute.Insert(holdPointIndex, arrivalSegment);
+                var hold = _holds.Find(fdr.Callsign);
+                var holdSegment = hold is not null ? fdr.FindHoldWaypoint(hold.HoldPoint) : null;
 
-                // vatSys starts the strip at the last overflown waypoint. SetOverflownIndexPatch
-                // does not let the hold point become overflown, thus remove the waypoints before it.
-                if (hold.HoldEntryTime is not null)
-                    stripRoute.RemoveRange(0, holdPointIndex);
+                var isChanged = AddDelays(fdr, stripRoute, holdSegment);
+                if (hold is not null && holdSegment is not null)
+                    isChanged |= AddHold(fdr, stripRoute, hold, holdSegment);
 
-                route = stripRoute;
+                if (isChanged)
+                    route = stripRoute;
             }
             catch (Exception ex)
             {
                 _errorReporter.ReportError(ex);
             }
+        }
+
+        // Returns true if the strip route changed. At the hold point, the hold wins over the delay.
+        static bool AddDelays(
+            FDP2.FDR fdr,
+            List<FDP2.FDR.ExtractedRoute.Segment> stripRoute,
+            FDP2.FDR.ExtractedRoute.Segment? holdSegment)
+        {
+            var isChanged = false;
+            foreach (var activeDelay in fdr.GetActiveDelays())
+            {
+                var segment = fdr.ParsedRoute[activeDelay.Key];
+                if (segment == holdSegment)
+                    continue;
+
+                var stripIndex = stripRoute.IndexOf(segment);
+                if (stripIndex == -1)
+                    continue;
+
+                var arrivalTime = segment.ATO != DateTime.MaxValue ? segment.ATO : segment.ETO;
+                if (arrivalTime == DateTime.MaxValue)
+                    continue;
+
+                var arrivalSegment = CreateStripSegment(fdr, segment, segment.ETO, segment.ATO);
+                arrivalSegment.Tag = ArrivalSegmentTag;
+
+                stripRoute[stripIndex] = CreateStripSegment(fdr, segment, arrivalTime + activeDelay.Value, DateTime.MaxValue);
+                stripRoute.Insert(stripIndex, arrivalSegment);
+                isChanged = true;
+            }
+
+            return isChanged;
+        }
+
+        // Returns true if the strip route changed.
+        static bool AddHold(
+            FDP2.FDR fdr,
+            List<FDP2.FDR.ExtractedRoute.Segment> stripRoute,
+            HoldItem hold,
+            FDP2.FDR.ExtractedRoute.Segment holdSegment)
+        {
+            var holdPointIndex = stripRoute.IndexOf(holdSegment);
+            if (holdPointIndex == -1)
+                return false;
+
+            if (!fdr.TryGetHoldArrivalTime(holdSegment, hold.HoldEntryTime, out var arrivalTime))
+                return false;
+
+            // After the aircraft gets to the hold point, the arrival time is an ATO.
+            var arrivalSegment = hold.HoldEntryTime is null
+                ? CreateStripSegment(fdr, holdSegment, arrivalTime, DateTime.MaxValue)
+                : CreateStripSegment(fdr, holdSegment, DateTime.MaxValue, arrivalTime);
+            arrivalSegment.Tag = ArrivalSegmentTag;
+
+            // The hold point has an ATO when the hold started after the aircraft crossed the
+            // hold point. The strip shows the ATO before the ETO, thus the exit time must go on
+            // a copy of the hold point.
+            var exitSegment = holdSegment.ATO == DateTime.MaxValue
+                ? holdSegment
+                : CreateStripSegment(fdr, holdSegment, hold.HoldExitTime, DateTime.MaxValue);
+
+            stripRoute[holdPointIndex] = exitSegment;
+            stripRoute.Insert(holdPointIndex, arrivalSegment);
+
+            // vatSys starts the strip at the last overflown waypoint. SetOverflownIndexPatch
+            // does not let the hold point become overflown, thus remove the waypoints before it.
+            if (hold.HoldEntryTime is not null)
+                stripRoute.RemoveRange(0, holdPointIndex);
+
+            return true;
         }
 
         // Make a segment for the strip only. It is not in the route of the FDR.
@@ -321,8 +363,9 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     In a hold, add "A" to the arrival time of the hold point on the strip, and "D" to the
-    ///     exit time. PaintStripItemPatch puts the arrival copy of the hold point in the route.
+    ///     For a delay (DLE) or a hold, add "A" to the arrival time of the waypoint on the strip,
+    ///     and "D" to the departure time. PaintStripItemPatch puts the arrival copy of the
+    ///     waypoint in the route.
     /// </summary>
     [HarmonyPatch]
     static class GetItemTextPatch
@@ -353,8 +396,9 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     Open the delay popup when the user right-clicks the ETO of a waypoint on the strip. Do
-    ///     not open it when the controller does not have permission to change the flight plan.
+    ///     Open the delay popup when the user right-clicks the ETO of a waypoint with a delay (DLE)
+    ///     in the remarks. Do nothing for the other waypoints. Do not open it when the controller
+    ///     does not have permission to change the flight plan.
     /// </summary>
     [HarmonyPatch]
     static class StripMouseUpPatch
@@ -397,6 +441,9 @@ public static class HoldPatches
                     return;
 
                 var delay = GetCurrentDelay(fdr, segment);
+                if (delay is null)
+                    return;
+
                 WeakReferenceMessenger.Default.Send(new OpenDelayPopupCommand(fdr.Callsign, segment.GetFlightPlanName(), delay));
             }
             catch (Exception ex)
@@ -405,24 +452,13 @@ public static class HoldPatches
             }
         }
 
-        // The delay is the delay at the waypoint in the remarks. If there is none, on the hold entry
-        // point and the hold exit point, the delay is the current hold duration.
+        // The popup changes the delay from the pilot (DLE) at the waypoint in the remarks.
         static TimeSpan? GetCurrentDelay(FDP2.FDR fdr, FDP2.FDR.ExtractedRoute.Segment segment)
         {
             var waypointName = segment.GetFlightPlanName();
-            var delayRemark = DelayRemarks.Parse(fdr).FirstOrDefault(d => d.WaypointName == waypointName);
-            if (delayRemark is not null)
-                return delayRemark.Delay;
-
-            var hold = _holds.Find(fdr.Callsign);
-            if (hold is null || segment.Intersection.Name != hold.HoldPoint)
-                return null;
-
-            var holdSegment = fdr.FindHoldWaypoint(hold.HoldPoint);
-            if (holdSegment is null || !fdr.TryGetHoldArrivalTime(holdSegment, hold.HoldEntryTime, out var arrivalTime))
-                return null;
-
-            return hold.HoldExitTime - arrivalTime;
+            return DelayRemarks.Parse(fdr)
+                .FirstOrDefault(d => d.Type == DelayType.Delay && d.WaypointName == waypointName)
+                ?.Delay;
         }
 
         // Find the clickspot at the mouse position, the same as vatSys does.
@@ -441,17 +477,23 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     Do not show a RAM alert for an aircraft in a hold.
+    ///     Do not show a RAM alert for an aircraft in a hold, or for an aircraft with the hold
+    ///     point as the next waypoint.
     /// </summary>
     [HarmonyPatch(typeof(RDP), "CheckForRAM", typeof(RDP.RadarTrack))]
     static class CheckForRAMPatch
     {
         static bool Prefix(RDP.RadarTrack rt, ref bool __result)
         {
-            if (rt.CoupledFDR is null)
+            var fdr = rt.CoupledFDR;
+            if (fdr is null)
                 return true;
 
-            if (_holds.Find(rt.CoupledFDR.Callsign) is null)
+            var hold = _holds.Find(fdr.Callsign);
+            if (hold is null)
+                return true;
+
+            if (hold.HoldEntryTime is null && fdr.GetNextWaypoint() != fdr.FindHoldWaypoint(hold.HoldPoint))
                 return true;
 
             __result = false;

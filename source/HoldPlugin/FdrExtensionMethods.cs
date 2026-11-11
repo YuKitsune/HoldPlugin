@@ -9,6 +9,11 @@ public static class FdrExtensionMethods
     public static string GetFlightPlanName(this FDP2.FDR.ExtractedRoute.Segment segment) =>
         Conversions.ConvertWaypointNameToFlightPlan(segment);
 
+    public static FDP2.FDR.ExtractedRoute.Segment? GetNextWaypoint(this FDP2.FDR fdr) =>
+        fdr.ParsedRoute.ToList()
+            .Skip(Math.Max(fdr.ParsedRoute.OverflownIndex + 1, 0))
+            .FirstOrDefault(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT);
+
     // In the hold, the arrival time is the hold entry time. Before the aircraft gets to the hold
     // point, the arrival time is the time at the previous segment plus the EET to the hold point.
     // CalculateETOsPatch does not change the segments before the hold point.
@@ -35,8 +40,42 @@ public static class FdrExtensionMethods
         if (previousTime == DateTime.MaxValue)
             return false;
 
+        // The aircraft leaves the previous waypoint after the delay at it.
+        if (fdr.GetActiveDelays().TryGetValue(holdPointIndex - 1, out var delay))
+            previousTime += delay;
+
         arrivalTime = previousTime + holdSegment.EET;
         return true;
+    }
+
+    // The delays (DLE) in the remarks that change the ETOs, by route index. vatSys calculates the
+    // ETOs from the last ATO, thus the times up to the last ATO already contain the delays before
+    // it. If the route has the waypoint more than one time, the delay is at the first one.
+    public static Dictionary<int, TimeSpan> GetActiveDelays(this FDP2.FDR fdr)
+    {
+        var activeDelays = new Dictionary<int, TimeSpan>();
+
+        var delays = DelayRemarks.Parse(fdr).Where(d => d.Type == DelayType.Delay).ToList();
+        if (delays.Count == 0)
+            return activeDelays;
+
+        var route = fdr.ParsedRoute.ToList();
+        var startIndex = Math.Max(route.FindLastIndex(s => s.ATO != DateTime.MaxValue), 0);
+        for (var i = startIndex; i < route.Count && delays.Count > 0; i++)
+        {
+            if (route[i].Type != FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT)
+                continue;
+
+            var waypointName = route[i].GetFlightPlanName();
+            var delay = delays.FirstOrDefault(d => d.WaypointName == waypointName);
+            if (delay is null)
+                continue;
+
+            activeDelays[i] = delay.Delay;
+            delays.Remove(delay);
+        }
+
+        return activeDelays;
     }
 
     // Find the hold-point waypoint on the route. Search forward from the next waypoint first.
