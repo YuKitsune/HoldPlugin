@@ -537,7 +537,14 @@ public class Plugin
             return;
 
         if (fdr is not null)
+        {
             ResetEstimates(fdr, hold);
+
+            // CheckForRAMPatch does not stop a RAM alert any more. Request an APR, so that vatSys
+            // finds the aircraft on its route again and removes a RAM alert. The APR goes on the
+            // task queue of the FDR, after the processing that ResetEstimates requested.
+            RDP.RequestAPR(fdr);
+        }
 
         FreeSlotIfUnused(hold.HoldPoint);
     }
