@@ -43,7 +43,13 @@
                      Text="{Binding DelayDuration, UpdateSourceTrigger=PropertyChanged}"
                      PreviewTextInput="DelayDurationTextBox_PreviewTextInput"
                      PreviewKeyDown="DelayDurationTextBox_PreviewKeyDown"
-                     DataObject.Pasting="DelayDurationTextBox_Pasting" />
+                     GotKeyboardFocus="DelayDurationTextBox_GotKeyboardFocus"
+                     DataObject.Pasting="DelayDurationTextBox_Pasting">
+                <TextBox.InputBindings>
+                    <KeyBinding Key="Enter" Command="{Binding SubmitCommand}" />
+                    <KeyBinding Key="Escape" Command="{Binding CancelCommand}" />
+                </TextBox.InputBindings>
+            </TextBox>
         </Grid>
     </Border>
 </UserControl>

@@ -2,29 +2,24 @@
 using System.Windows.Controls;
 using System.Windows.Input;
 using HoldPlugin.ViewModels;
+using vatSysToolbox.Windows;
 
 namespace HoldPlugin.Controls;
 
 public partial class DelayPopup : UserControl
 {
-    readonly DelayPopupViewModel _viewModel;
-
-    // Occurs when the user presses the enter key or the escape key.
-    public event EventHandler? CloseRequested;
-
-    public DelayPopup(DelayPopupViewModel viewModel)
+    public DelayPopup(DelayPopupViewModel viewModel, IWindowHandle windowHandle)
     {
         InitializeComponent();
         DataContext = viewModel;
-        _viewModel = viewModel;
+
+        // The text box can get the keyboard focus only after the popup shows
+        windowHandle.Shown += (_, _) => DelayDurationTextBox.Focus();
     }
 
-    public void FocusDelayDuration()
+    // Select the current delay, so that the user can type over it.
+    void DelayDurationTextBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        DelayDurationTextBox.Focus();
-        Keyboard.Focus(DelayDurationTextBox);
-
-        // Select the current delay, so that the user can type over it.
         DelayDurationTextBox.SelectAll();
     }
 
@@ -39,26 +34,11 @@ public partial class DelayPopup : UserControl
             e.CancelCommand();
     }
 
+    // The space key does not cause a PreviewTextInput event.
     void DelayDurationTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        switch (e.Key)
-        {
-            // The space key does not cause a PreviewTextInput event.
-            case Key.Space:
-                e.Handled = true;
-                break;
-
-            case Key.Enter:
-                e.Handled = true;
-                _viewModel.SubmitCommand.Execute(null);
-                CloseRequested?.Invoke(this, EventArgs.Empty);
-                break;
-
-            case Key.Escape:
-                e.Handled = true;
-                CloseRequested?.Invoke(this, EventArgs.Empty);
-                break;
-        }
+        if (e.Key == Key.Space)
+            e.Handled = true;
     }
 
     // char.IsDigit also accepts digits that are not ASCII.
