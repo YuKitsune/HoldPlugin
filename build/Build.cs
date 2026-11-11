@@ -66,6 +66,9 @@ class Build : FalloutBuild
     [GitVersion]
     readonly GitVersion GitVersion;
 
+    [Parameter("Version to use instead of the GitVersion version (e.g. 1.0.0-rc1)")]
+    readonly string ForceVersion;
+
     // The NuGet feed that contains the vatSysToolbox package
     const string NuGetSourceName = "YuKitsune";
     const string NuGetSourceUrl = "https://nuget.pkg.github.com/YuKitsune/index.json";
@@ -189,8 +192,8 @@ class Build : FalloutBuild
                 .SetConfiguration(Configuration)
                 .SetOutputDirectory(PluginBuildOutputDirectory)
                 .SetVersion(version)
-                .SetAssemblyVersion(GitVersion?.MajorMinorPatch ?? "0.0.0")
-                .SetFileVersion(GitVersion?.MajorMinorPatch ?? "0.0.0")
+                .SetAssemblyVersion(GetMajorMinorPatch())
+                .SetFileVersion(GetMajorMinorPatch())
                 .SetInformationalVersion(version)
                 .SetProperty("VatSysPath", VatSysExePath.Parent.Parent));
         });
@@ -364,8 +367,24 @@ class Build : FalloutBuild
         return Path.Combine(documentsPath, "vatSys Files", "Profiles", profileName);
     }
 
+    // The assembly version and the file version cannot have a pre-release label or build metadata.
+    string GetMajorMinorPatch()
+    {
+        if (!string.IsNullOrEmpty(ForceVersion))
+        {
+            return ForceVersion.Split('-', '+')[0];
+        }
+
+        return GitVersion?.MajorMinorPatch ?? "0.0.0";
+    }
+
     private string GetSemanticVersion()
     {
+        if (!string.IsNullOrEmpty(ForceVersion))
+        {
+            return ForceVersion;
+        }
+
         if (GitVersion is null)
         {
             return "0.0.0";
