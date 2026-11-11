@@ -1,6 +1,7 @@
 using System.ComponentModel.Composition;
 using System.Windows.Forms;
 using HoldPlugin.Contracts;
+using HoldPlugin.Patches;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 using vatsys;

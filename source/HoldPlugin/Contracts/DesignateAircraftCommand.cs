@@ -12,6 +12,7 @@ public record OpenDelayPopupCommand(string Callsign, string WaypointName, TimeSp
 public record SetHoldDelayCommand(string Callsign, string WaypointName, TimeSpan Delay) : IRequest;
 
 public record HoldKeyPressedCommand(string Callsign, Coordinate Position, double DistanceTolerance) : IRequest;
+public record InitiateHoldCommand(string Callsign, string WaypointName) : IRequest;
 
 // The hold list view models also receive this notification through WeakReferenceMessenger.
 public record RefreshHoldsCommand : INotification;

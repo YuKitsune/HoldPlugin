@@ -8,7 +8,7 @@ using MediatR;
 using vatsys;
 using vatSysToolbox;
 
-namespace HoldPlugin;
+namespace HoldPlugin.Patches;
 
 /// <summary>
 ///     Harmony patches for the hold key. The key initiates or cancels a hold on the ASD. The

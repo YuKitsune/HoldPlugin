@@ -18,9 +18,6 @@ public class HoldKeyPressedHandler(
     IErrorReporter errorReporter)
     : IRequestHandler<HoldKeyPressedCommand>
 {
-    // The hold duration that the hold key gives.
-    static readonly TimeSpan DefaultHoldDuration = TimeSpan.FromMinutes(10);
-
     public Task Handle(HoldKeyPressedCommand request, CancellationToken cancellationToken)
     {
         workQueue.Enqueue(async () =>
@@ -47,7 +44,7 @@ public class HoldKeyPressedHandler(
                 if (holdPointName is null)
                     return;
 
-                holdService.SetDelay(fdr, DelayType.Hold, holdPointName, DefaultHoldDuration);
+                holdService.SetDelay(fdr, DelayType.Hold, holdPointName, HoldService.DefaultHoldDuration);
             }
             catch (Exception ex)
             {

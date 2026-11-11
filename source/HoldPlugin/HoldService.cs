@@ -18,6 +18,9 @@ public class HoldService(
     WindowManager windowManager,
     IMediator mediator)
 {
+    // The hold duration that the hold key and the Hold item of the waypoint menu give.
+    public static readonly TimeSpan DefaultHoldDuration = TimeSpan.FromMinutes(10);
+
     // vatSys does not calculate an estimate from radar below this ground speed (knots).
     const double MinimumGroundSpeed = 10;
 

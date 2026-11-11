@@ -7,7 +7,7 @@ using MediatR;
 using vatsys;
 using vatSysToolbox;
 
-namespace HoldPlugin;
+namespace HoldPlugin.Patches;
 
 /// <summary>
 ///     Harmony patches that stop vatSys from moving an aircraft along its route while the
@@ -659,6 +659,32 @@ public static class HoldPatches
             }
 
             return null;
+        }
+    }
+
+    /// <summary>
+    ///     The Hold item of the waypoint menu in the strip calls FDP2.Hold. Initiate a hold from
+    ///     the plugin at the waypoint, in place of the vatSys hold. Only the waypoint menu calls
+    ///     FDP2.Hold.
+    /// </summary>
+    [HarmonyPatch(typeof(FDP2), nameof(FDP2.Hold))]
+    static class WaypointMenuHoldPatch
+    {
+        static bool Prefix(FDP2.FDR fdr, FDP2.FDR.ExtractedRoute.Segment position, ref bool __result)
+        {
+            try
+            {
+                _ = _mediator.Send(new InitiateHoldCommand(fdr.Callsign, position.GetFlightPlanName()));
+
+                // vatSys sends the estimates of the vatSys hold only when the result is true.
+                __result = false;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+                return true;
+            }
         }
     }
 
