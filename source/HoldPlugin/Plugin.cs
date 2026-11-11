@@ -565,6 +565,19 @@ public class Plugin
         SyncHold(fdr);
     }
 
+    /// <summary>
+    ///     Remove the delay (DLE) at the waypoint from the remarks. OnFDRPropertyChanged calculates
+    ///     the ETOs again when the remarks change. Do nothing when the controller does not have
+    ///     permission to change the flight plan.
+    /// </summary>
+    void RemoveDelay(FDP2.FDR fdr, string waypointName)
+    {
+        if (!fdr.HavePermission)
+            return;
+
+        DelayRemarks.Remove(fdr, DelayType.Delay, waypointName);
+    }
+
     // vatSys sets the ATO to DateTime.MaxValue until the aircraft overflies the hold point.
     static DateTime? GetHoldEntryTime(FDP2.FDR.ExtractedRoute.Segment holdSegment)
     {
@@ -854,7 +867,10 @@ public class Plugin
                 if (fdr is null)
                     return;
 
-                SetDelay(fdr, DelayType.Delay, message.WaypointName, message.Delay);
+                if (message.Delay == TimeSpan.Zero)
+                    RemoveDelay(fdr, message.WaypointName);
+                else
+                    SetDelay(fdr, DelayType.Delay, message.WaypointName, message.Delay);
             }
             catch (Exception ex)
             {

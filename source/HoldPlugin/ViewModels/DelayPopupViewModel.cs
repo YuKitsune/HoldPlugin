@@ -11,16 +11,17 @@ public partial class DelayPopupViewModel(string callsign, string waypointName, T
     [ObservableProperty] string _delayDuration = FormatDuration(delay);
 
     /// <summary>
-    ///     Set the delay at the waypoint in the remarks of the flight plan.
+    ///     Set the delay at the waypoint in the remarks of the flight plan. A delay of zero
+    ///     (e.g. 0000) removes the delay.
     /// </summary>
     [RelayCommand]
     void Submit()
     {
         var newDelay = ParseDuration(DelayDuration);
-        if (newDelay <= TimeSpan.Zero)
+        if (newDelay is null || newDelay < TimeSpan.Zero)
             return;
 
-        WeakReferenceMessenger.Default.Send(new SetHoldDelayCommand(callsign, WaypointName, newDelay));
+        WeakReferenceMessenger.Default.Send(new SetHoldDelayCommand(callsign, WaypointName, newDelay.Value));
     }
 
     // The format is HHMM.
@@ -36,12 +37,12 @@ public partial class DelayPopupViewModel(string callsign, string waypointName, T
         return $"{totalMinutes / 60:00}{totalMinutes % 60:00}";
     }
 
-    // The format is HHMM. One or two digits are minutes only.
-    static TimeSpan ParseDuration(string durationString)
+    // The format is HHMM. One or two digits are minutes only. Returns null if the format is not correct.
+    static TimeSpan? ParseDuration(string durationString)
     {
         if (string.IsNullOrEmpty(durationString))
         {
-            return TimeSpan.Zero;
+            return null;
         }
 
         if (durationString.Length <= 2 && int.TryParse(durationString, out var minutes))
@@ -51,14 +52,14 @@ public partial class DelayPopupViewModel(string callsign, string waypointName, T
 
         if (durationString.Length <= 2)
         {
-            return TimeSpan.Zero;
+            return null;
         }
 
         var minutesPart = durationString.Substring(durationString.Length - 2, 2);
         var hoursPart = durationString.Substring(0, durationString.Length - 2);
         if (!int.TryParse(minutesPart, out minutes) || !int.TryParse(hoursPart, out var hours))
         {
-            return TimeSpan.Zero;
+            return null;
         }
 
         var totalMinutes = minutes + hours * 60;
