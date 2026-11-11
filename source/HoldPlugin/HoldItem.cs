@@ -12,4 +12,6 @@ public record HoldItem(
     IClearedFlightLevel ClearedFlightLevel,
     bool RvsmApproved,
     string GlobalOps,
-    HoldItemState State);
+    HoldItemState State,
+    // The delay from the remarks. When it has a value, the exit time is the arrival time plus the delay.
+    TimeSpan? Delay);

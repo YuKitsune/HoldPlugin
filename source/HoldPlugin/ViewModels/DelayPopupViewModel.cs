@@ -5,14 +5,13 @@ using HoldPlugin.Contracts;
 
 namespace HoldPlugin.ViewModels;
 
-public partial class DelayPopupViewModel(string callsign, string waypointName, DateTime arrivalTime, TimeSpan? delay) : ObservableObject
+public partial class DelayPopupViewModel(string callsign, string waypointName, TimeSpan? delay) : ObservableObject
 {
     [ObservableProperty] string _waypointName = waypointName;
     [ObservableProperty] string _delayDuration = FormatDuration(delay);
 
     /// <summary>
-    ///     Initiate a hold at the waypoint, with an exit time of the arrival time plus the delay.
-    ///     If the aircraft already holds at the waypoint, change the exit time.
+    ///     Set the delay at the waypoint in the remarks of the flight plan.
     /// </summary>
     [RelayCommand]
     void Submit()
@@ -21,7 +20,7 @@ public partial class DelayPopupViewModel(string callsign, string waypointName, D
         if (newDelay <= TimeSpan.Zero)
             return;
 
-        WeakReferenceMessenger.Default.Send(new SetHoldDelayCommand(callsign, WaypointName, arrivalTime + newDelay));
+        WeakReferenceMessenger.Default.Send(new SetHoldDelayCommand(callsign, WaypointName, newDelay));
     }
 
     // The format is HHMM.

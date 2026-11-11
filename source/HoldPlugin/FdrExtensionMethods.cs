@@ -4,6 +4,36 @@ namespace HoldPlugin;
 
 public static class FdrExtensionMethods
 {
+    // In the hold, the arrival time is the hold entry time. Before the aircraft gets to the hold
+    // point, the arrival time is the time at the previous segment plus the EET to the hold point.
+    // CalculateETOsPatch does not change the segments before the hold point.
+    public static bool TryGetHoldArrivalTime(
+        this FDP2.FDR fdr,
+        FDP2.FDR.ExtractedRoute.Segment holdSegment,
+        DateTime? holdEntryTime,
+        out DateTime arrivalTime)
+    {
+        arrivalTime = DateTime.MaxValue;
+
+        if (holdEntryTime is not null)
+        {
+            arrivalTime = holdEntryTime.Value;
+            return true;
+        }
+
+        var holdPointIndex = fdr.ParsedRoute.IndexOf(holdSegment);
+        if (holdPointIndex < 1)
+            return false;
+
+        var previousSegment = fdr.ParsedRoute[holdPointIndex - 1];
+        var previousTime = previousSegment.ATO != DateTime.MaxValue ? previousSegment.ATO : previousSegment.ETO;
+        if (previousTime == DateTime.MaxValue)
+            return false;
+
+        arrivalTime = previousTime + holdSegment.EET;
+        return true;
+    }
+
     // Find the hold-point waypoint on the route. Search forward from the current waypoint first.
     // Then search backward from the current waypoint, because the aircraft can pass the hold
     // point (e.g. aircraft is established in the hold, or a handoff is accepted after

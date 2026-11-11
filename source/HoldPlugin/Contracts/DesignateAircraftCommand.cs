@@ -9,8 +9,10 @@ public record CancelHoldCommand(string Callsign);
 public record OpenClearedLevelMenuCommand(string Callsign);
 public record OpenHoldExitMenuCommand(string Callsign);
 public record ChangeGlobalOpsCommand(string Callsign, string GlobalOps);
-public record OpenDelayPopupCommand(string Callsign, string WaypointName, DateTime ArrivalTime, TimeSpan? Delay);
-public record SetHoldDelayCommand(string Callsign, string WaypointName, DateTime HoldExitTime);
+public record OpenDelayPopupCommand(string Callsign, string WaypointName, TimeSpan? Delay);
+public record SetHoldDelayCommand(string Callsign, string WaypointName, TimeSpan Delay);
+
+public record HoldCompletedCommand(string HoldPoint);
 
 public record RefreshHoldsCommand;
 public record HoldSlotsUpdatedCommand;
