@@ -55,7 +55,7 @@ public static class HoldPatches
 
     /// <summary>
     ///     Add the delays (DLE) in the remarks and the hold to the ETOs. A delay does not change
-    ///     the ETO of its waypoint, thus vatSys moves the aircraft past the waypoint as usual. The
+    ///     the ETO of its waypoint, thus vatSys marks the waypoint as overflown as usual. The
     ///     ETOs after the waypoint start at the ETO plus the delay. In a hold, the ETO of the hold
     ///     point is the arrival time, and the ETOs after the hold point start at the hold exit
     ///     time. The hold exit time is the arrival time plus the delay.
@@ -266,6 +266,69 @@ public static class HoldPatches
 
                 _holds.Update(fdr.Callsign, h => h with { HoldEntryTime = h.HoldEntryTime ?? holdSegment.ETO });
                 FDP2.Process(fdr);
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Keep a flight plan track (with no radar track) at the waypoint of a delay (DLE) until
+    ///     the exit time: the arrival time plus the delay. After the exit time, move the track
+    ///     to the next waypoint. vatSys moves the track from the arrival time, thus without this
+    ///     patch the track moves slowly for all of the delay. A radar track uses its radar
+    ///     position, thus a delay does not stop it.
+    /// </summary>
+    [HarmonyPatch(typeof(FDP2), nameof(FDP2.GenerateTrackPosition))]
+    static class DelayTrackPositionPatch
+    {
+        static void Postfix(FDP2.FDR fdr)
+        {
+            try
+            {
+                if (fdr.CoupledTrack is not null ||
+                    fdr.State == FDP2.FDR.FDRStates.STATE_INACTIVE ||
+                    fdr.State == FDP2.FDR.FDRStates.STATE_FINISHED ||
+                    fdr.ATD > DateTime.UtcNow)
+                    return;
+
+                var route = fdr.ParsedRoute.ToList();
+                var overflownIndex = fdr.ParsedRoute.OverflownIndex;
+                if (overflownIndex < 0 || overflownIndex + 1 >= route.Count)
+                    return;
+
+                if (!fdr.GetActiveDelays().TryGetValue(overflownIndex, out var delay))
+                    return;
+
+                var delaySegment = route[overflownIndex];
+                var nextSegment = route[overflownIndex + 1];
+                var arrivalTime = delaySegment.ATO != DateTime.MaxValue ? delaySegment.ATO : delaySegment.ETO;
+                if (arrivalTime == DateTime.MaxValue || nextSegment.ETO == DateTime.MaxValue)
+                    return;
+
+                var exitTime = arrivalTime + delay;
+                var predictedPosition = fdr.PredictedPosition;
+                if (DateTime.UtcNow < exitTime || nextSegment.ETO <= exitTime)
+                {
+                    predictedPosition.Location = delaySegment.Intersection.LatLong;
+                    predictedPosition.Groundspeed = 0.0;
+                    predictedPosition.Track = delaySegment.Track;
+                }
+                else
+                {
+                    // The same as vatSys, but from the exit time and not from the arrival time.
+                    var legTime = nextSegment.ETO - exitTime;
+                    var fraction = (DateTime.UtcNow - exitTime).TotalMilliseconds / legTime.TotalMilliseconds;
+                    predictedPosition.Location = fraction < 1.0
+                        ? Conversions.CalculateLLFromFractionOfRoute(delaySegment.Intersection.LatLong, nextSegment.Intersection.LatLong, fraction)
+                        : nextSegment.Intersection.LatLong;
+                    predictedPosition.Track = nextSegment.Track;
+                    predictedPosition.Groundspeed = nextSegment.Distance / legTime.TotalHours;
+                }
+
+                fdr.OnPropertyChanged(nameof(FDP2.FDR.PredictedPosition));
             }
             catch (Exception ex)
             {
