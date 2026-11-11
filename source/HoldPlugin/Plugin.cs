@@ -728,7 +728,7 @@ public class Plugin
     /// </summary>
     void AddHoldToLabel(FDP2.FDR fdr, string holdPoint, int exitTimeMinutes)
     {
-        var holdSection = $"H/{holdPoint}/{exitTimeMinutes}";
+        var holdSection = $"H/{holdPoint}/{exitTimeMinutes:00}";
         var labelData = string.IsNullOrEmpty(fdr.LabelOpData)
             ? holdSection
             : $"{fdr.LabelOpData} {holdSection}";
@@ -777,7 +777,7 @@ public class Plugin
             if (separatorIndices.Count == 0)
                 return;
 
-            var minutesText = minutes.ToString();
+            var minutesText = minutes.ToString("00");
 
             if (separatorIndices.Count >= 2)
             {
