@@ -94,8 +94,10 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     In a hold, do not mark the hold point as overflown. This is necessary when the hold
-    ///     exit time is in the past, but the aircraft is still in the hold.
+    ///     Before the aircraft gets to the hold point, do not mark the hold point as overflown.
+    ///     In the hold, mark the hold point as overflown, but not the segments after it. vatSys
+    ///     does not mark the hold point as overflown, because its ETO is the hold exit time. Also,
+    ///     the aircraft can stay in the hold after the hold exit time.
     /// </summary>
     [HarmonyPatch(typeof(FDP2.FDR.ExtractedRoute), "SetOverflownIndex")]
     static class SetOverflownIndexPatch
@@ -104,14 +106,17 @@ public static class HoldPatches
         {
             try
             {
-                if (!TryGetHoldPointIndex(__instance.Parent, out _, out var holdPointIndex))
+                if (!TryGetHoldPointIndex(__instance.Parent, out var hold, out var holdPointIndex))
                     return;
 
-                var maximumOverflownIndex = holdPointIndex - 1;
-                if (__instance.OverflownIndex <= maximumOverflownIndex)
+                var overflownIndex = hold.HoldEntryTime is null
+                    ? Math.Min(__instance.OverflownIndex, holdPointIndex - 1)
+                    : holdPointIndex;
+
+                if (__instance.OverflownIndex == overflownIndex)
                     return;
 
-                __instance.OverflownIndex = maximumOverflownIndex;
+                __instance.OverflownIndex = overflownIndex;
                 __instance.FirePropertyChanged("OverflownIndex");
             }
             catch (Exception ex)
@@ -156,7 +161,12 @@ public static class HoldPatches
                         return true;
 
                     if (segmentIndex == holdPointIndex)
+                    {
                         _holds.Update(fdr.Callsign, h => h with { HoldEntryTime = h.HoldEntryTime ?? DateTime.UtcNow });
+
+                        // Calculate the overflown index again, so that the hold point is overflown.
+                        FDP2.Process(fdr);
+                    }
 
                     return false;
                 }
