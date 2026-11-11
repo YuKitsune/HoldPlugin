@@ -56,9 +56,9 @@ public static class HoldPatches
     /// <summary>
     ///     Add the delays (DLE) in the remarks and the hold to the ETOs. A delay does not change
     ///     the ETO of its waypoint, thus vatSys moves the aircraft past the waypoint as usual. The
-    ///     ETOs after the waypoint start at the ETO plus the delay. In a hold, set the ETO of the
-    ///     hold point to the hold exit time. When the hold has a delay from the remarks, the hold
-    ///     exit time is the arrival time plus the delay.
+    ///     ETOs after the waypoint start at the ETO plus the delay. In a hold, the ETO of the hold
+    ///     point is the arrival time, and the ETOs after the hold point start at the hold exit
+    ///     time. The hold exit time is the arrival time plus the delay.
     /// </summary>
     [HarmonyPatch(typeof(FDP2.FDR.ExtractedRoute), nameof(FDP2.FDR.ExtractedRoute.CalculateETOs))]
     static class CalculateETOsPatch
@@ -92,10 +92,18 @@ public static class HoldPatches
                         segment.ETONoEvent = departureTime + segment.EET;
                     }
 
+                    // The ETO of the hold point is the arrival time. vatSys moves a flight plan
+                    // track to the ETO of the next waypoint, thus the track gets to the hold point
+                    // at the arrival time. The ETOs after the hold point start at the exit time.
                     if (hasHold && i == holdPointIndex)
                     {
-                        departureTime = GetHoldExitTime(fdr, hold, segment);
-                        segment.ETONoEvent = departureTime;
+                        departureTime = hold.HoldExitTime;
+                        if (fdr.TryGetHoldArrivalTime(segment, hold.HoldEntryTime, out var holdArrivalTime))
+                        {
+                            segment.ETONoEvent = holdArrivalTime;
+                            departureTime = UpdateHoldExitTime(fdr, hold, holdArrivalTime);
+                        }
+
                         continue;
                     }
 
@@ -114,11 +122,8 @@ public static class HoldPatches
             }
         }
 
-        static DateTime GetHoldExitTime(FDP2.FDR fdr, HoldItem hold, FDP2.FDR.ExtractedRoute.Segment holdSegment)
+        static DateTime UpdateHoldExitTime(FDP2.FDR fdr, HoldItem hold, DateTime arrivalTime)
         {
-            if (!fdr.TryGetHoldArrivalTime(holdSegment, hold.HoldEntryTime, out var arrivalTime))
-                return hold.HoldExitTime;
-
             var holdExitTime = arrivalTime + hold.Delay;
             if (holdExitTime != hold.HoldExitTime)
                 _holds.Update(fdr.Callsign, h => h with { HoldExitTime = holdExitTime });
@@ -128,8 +133,9 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     In a hold, do not mark the hold point as overflown. This is necessary when the hold
-    ///     exit time is in the past, but the aircraft is still in the hold. The graphical route
+    ///     In a hold, do not mark the hold point as overflown. This is necessary because the ETO
+    ///     of the hold point is the arrival time, and the aircraft stays in the hold after it. A
+    ///     flight plan track then stays at the hold point. The graphical route
     ///     starts at the aircraft position and goes to the segment after the overflown index, thus
     ///     it shows the hold point.
     /// </summary>
@@ -237,6 +243,38 @@ public static class HoldPatches
     }
 
     /// <summary>
+    ///     vatSys does not make position reports for a flight plan track (with no radar track).
+    ///     When the flight plan track gets to the hold point, record the hold entry time. The
+    ///     arrival time is the ETO of the hold point (see <see cref="CalculateETOsPatch"/>).
+    /// </summary>
+    [HarmonyPatch(typeof(FDP2), nameof(FDP2.GenerateTrackPosition))]
+    static class GenerateTrackPositionPatch
+    {
+        static void Prefix(FDP2.FDR fdr)
+        {
+            try
+            {
+                if (fdr.CoupledTrack is not null || !TryGetHoldPointIndex(fdr, out var hold, out var holdPointIndex))
+                    return;
+
+                if (hold.HoldEntryTime is not null)
+                    return;
+
+                var holdSegment = fdr.ParsedRoute[holdPointIndex];
+                if (holdSegment.ETO == DateTime.MaxValue || holdSegment.ETO > DateTime.UtcNow)
+                    return;
+
+                _holds.Update(fdr.Callsign, h => h with { HoldEntryTime = h.HoldEntryTime ?? holdSegment.ETO });
+                FDP2.Process(fdr);
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+            }
+        }
+    }
+
+    /// <summary>
     ///     Show the waypoint of a delay (DLE) or a hold two times on the strip. The first time
     ///     shows the arrival time (ETO or ATO). The second time shows the departure time: the
     ///     arrival time plus the delay, or the hold exit time. When the aircraft is in the hold,
@@ -324,12 +362,9 @@ public static class HoldPatches
                 : CreateStripSegment(fdr, holdSegment, DateTime.MaxValue, arrivalTime);
             arrivalSegment.Tag = ArrivalSegmentTag;
 
-            // The hold point has an ATO when the hold started after the aircraft crossed the
-            // hold point. The strip shows the ATO before the ETO, thus the exit time must go on
-            // a copy of the hold point.
-            var exitSegment = holdSegment.ATO == DateTime.MaxValue
-                ? holdSegment
-                : CreateStripSegment(fdr, holdSegment, hold.HoldExitTime, DateTime.MaxValue);
+            // The ETO of the hold point is the arrival time, thus the exit time must go on a copy
+            // of the hold point.
+            var exitSegment = CreateStripSegment(fdr, holdSegment, hold.HoldExitTime, DateTime.MaxValue);
 
             stripRoute[holdPointIndex] = exitSegment;
             stripRoute.Insert(holdPointIndex, arrivalSegment);

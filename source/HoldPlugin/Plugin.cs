@@ -617,7 +617,8 @@ public class Plugin
             {
                 if (!TryAddPositionReportBeforeHoldPoint(fdr, holdSegment) && didEnterHold)
                 {
-                    // There is no radar position. Thus the aircraft leaves the hold point now, if it got to the hold point.
+                    // There is no radar position (e.g. a flight plan track). The track is at the hold point, thus it
+                    // leaves the hold point now. vatSys calculates the ETOs after the hold point from this ATO.
                     holdSegment.ATONoEvent = DateTime.UtcNow;
                 }
             }
