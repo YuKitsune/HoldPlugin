@@ -5,10 +5,10 @@ using HoldPlugin.Contracts;
 
 namespace HoldPlugin.ViewModels;
 
-public partial class DelayPopupViewModel(string callsign, string waypointName, DateTime arrivalTime) : ObservableObject
+public partial class DelayPopupViewModel(string callsign, string waypointName, DateTime arrivalTime, TimeSpan? delay) : ObservableObject
 {
     [ObservableProperty] string _waypointName = waypointName;
-    [ObservableProperty] string _delayDuration = string.Empty;
+    [ObservableProperty] string _delayDuration = FormatDuration(delay);
 
     /// <summary>
     ///     Initiate a hold at the waypoint, with an exit time of the arrival time plus the delay.
@@ -17,11 +17,24 @@ public partial class DelayPopupViewModel(string callsign, string waypointName, D
     [RelayCommand]
     void Submit()
     {
-        var delay = ParseDuration(DelayDuration);
-        if (delay <= TimeSpan.Zero)
+        var newDelay = ParseDuration(DelayDuration);
+        if (newDelay <= TimeSpan.Zero)
             return;
 
-        WeakReferenceMessenger.Default.Send(new SetHoldDelayCommand(callsign, WaypointName, arrivalTime + delay));
+        WeakReferenceMessenger.Default.Send(new SetHoldDelayCommand(callsign, WaypointName, arrivalTime + newDelay));
+    }
+
+    // The format is HHMM.
+    static string FormatDuration(TimeSpan? duration)
+    {
+        if (duration is null || duration.Value <= TimeSpan.Zero)
+        {
+            return string.Empty;
+        }
+
+        // The times can have seconds. Round to the nearest minute.
+        var totalMinutes = (int)Math.Round(duration.Value.TotalMinutes);
+        return $"{totalMinutes / 60:00}{totalMinutes % 60:00}";
     }
 
     // The format is HHMM. One or two digits are minutes only.

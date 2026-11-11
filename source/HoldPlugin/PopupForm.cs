@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Forms;
 using System.Windows.Forms.Integration;
 
@@ -19,17 +20,28 @@ public class PopupForm : Form
         StartPosition = FormStartPosition.Manual;
         Location = Cursor.Position;
 
+        // A Canvas measures its child with no size limit. The view then always has its natural size,
+        // and SizeChanged occurs when WPF has done the layout of the view.
+        var canvas = new Canvas();
+        canvas.Children.Add(child);
+
         var elementHost = new ElementHost
         {
             Dock = DockStyle.Fill,
-            Child = child
+            Child = canvas
         };
         Controls.Add(elementHost);
 
         child.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+        ResizeToContent(child.DesiredSize);
+        child.SizeChanged += (_, e) => ResizeToContent(e.NewSize);
+    }
+
+    void ResizeToContent(System.Windows.Size contentSize)
+    {
         ClientSize = new System.Drawing.Size(
-            (int)Math.Ceiling(child.DesiredSize.Width),
-            (int)Math.Ceiling(child.DesiredSize.Height));
+            (int)Math.Ceiling(contentSize.Width),
+            (int)Math.Ceiling(contentSize.Height));
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

@@ -23,6 +23,9 @@ public partial class DelayPopup : UserControl
     {
         DelayDurationTextBox.Focus();
         Keyboard.Focus(DelayDurationTextBox);
+
+        // Select the current delay, so that the user can type over it.
+        DelayDurationTextBox.SelectAll();
     }
 
     void DelayDurationTextBox_PreviewTextInput(object sender, TextCompositionEventArgs e)

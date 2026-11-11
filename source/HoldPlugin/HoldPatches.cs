@@ -262,7 +262,7 @@ public static class HoldPatches
         // Before the aircraft gets to the hold point, the arrival ETO is the time at the previous
         // segment plus the EET to the hold point. CalculateETOsPatch does not change the segments
         // before the hold point.
-        static bool TryGetArrivalTime(
+        public static bool TryGetArrivalTime(
             FDP2.FDR fdr,
             HoldItem hold,
             FDP2.FDR.ExtractedRoute.Segment holdSegment,
@@ -344,8 +344,7 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     Open the delay popup when the user right-clicks the ETO of a waypoint on the strip. Do
-    ///     not open it on the hold exit time.
+    ///     Open the delay popup when the user right-clicks the ETO of a waypoint on the strip.
     /// </summary>
     [HarmonyPatch]
     static class StripMouseUpPatch
@@ -384,24 +383,47 @@ public static class HoldPatches
                 if (SourceFdrProperty.GetValue(IdField.GetValue(clickspot)) is not FDP2.FDR fdr)
                     return;
 
-                // On the strip, the hold exit time is on the hold point that is not the arrival copy.
-                var hold = _holds.Find(fdr.Callsign);
-                var isHoldExit = hold is not null &&
-                    segment.Intersection.Name == hold.HoldPoint &&
-                    segment.Tag != PaintStripItemPatch.ArrivalSegmentTag;
-                if (isHoldExit)
+                if (!TryGetArrivalTimeAndDelay(fdr, segment, out var arrivalTime, out var delay))
                     return;
 
-                var arrivalTime = segment.ATO != DateTime.MaxValue ? segment.ATO : segment.ETO;
-                if (arrivalTime == DateTime.MaxValue)
-                    return;
-
-                WeakReferenceMessenger.Default.Send(new OpenDelayPopupCommand(fdr.Callsign, segment.Intersection.Name, arrivalTime));
+                WeakReferenceMessenger.Default.Send(new OpenDelayPopupCommand(fdr.Callsign, segment.Intersection.Name, arrivalTime, delay));
             }
             catch (Exception ex)
             {
                 _errorReporter.ReportError(ex);
             }
+        }
+
+        // On the hold entry point and the hold exit point, the arrival time is the arrival time at
+        // the hold point, and the delay is the current hold duration. On other waypoints, there is
+        // no delay.
+        static bool TryGetArrivalTimeAndDelay(
+            FDP2.FDR fdr,
+            FDP2.FDR.ExtractedRoute.Segment segment,
+            out DateTime arrivalTime,
+            out TimeSpan? delay)
+        {
+            delay = null;
+
+            var hold = _holds.Find(fdr.Callsign);
+            if (hold is null || segment.Intersection.Name != hold.HoldPoint)
+            {
+                arrivalTime = segment.ATO != DateTime.MaxValue ? segment.ATO : segment.ETO;
+                return arrivalTime != DateTime.MaxValue;
+            }
+
+            arrivalTime = DateTime.MaxValue;
+
+            var holdSegment = fdr.FindHoldWaypoint(hold.HoldPoint);
+            if (holdSegment is null)
+                return false;
+
+            if (!PaintStripItemPatch.TryGetArrivalTime(fdr, hold, holdSegment, out var arrivalEto, out var arrivalAto))
+                return false;
+
+            arrivalTime = arrivalAto != DateTime.MaxValue ? arrivalAto : arrivalEto;
+            delay = hold.HoldExitTime - arrivalTime;
+            return true;
         }
 
         // Find the clickspot at the mouse position, the same as vatSys does.

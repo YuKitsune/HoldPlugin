@@ -811,7 +811,7 @@ public class Plugin
     {
         new GuiInvoker(MMI.InvokeOnGUI, _errorReporter.ReportError).InvokeOnUiThread(mainForm =>
         {
-            var viewModel = new DelayPopupViewModel(message.Callsign, message.WaypointName, message.ArrivalTime);
+            var viewModel = new DelayPopupViewModel(message.Callsign, message.WaypointName, message.ArrivalTime, message.Delay);
             var view = new DelayPopup(viewModel);
             var form = new PopupForm(view);
 
