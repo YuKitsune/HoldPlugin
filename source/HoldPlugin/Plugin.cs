@@ -27,8 +27,6 @@ public class Plugin
     IRecipient<HoldPointRemovedCommand>,
     IRecipient<RefreshHoldsCommand>
 {
-    const string HoldIndicatorStripItemTypePrefix = "HoldPlugin_Indicator_";
-
     // The hold duration to use when the label data has no exit time.
     static readonly TimeSpan DefaultHoldDuration = TimeSpan.FromMinutes(10);
 

@@ -200,6 +200,9 @@ public static class HoldPatches
     [HarmonyPatch]
     static class PaintStripItemPatch
     {
+        // Identifies the arrival copy of the hold point on the strip.
+        public static readonly object ArrivalSegmentTag = new();
+
         static MethodBase TargetMethod() => AccessTools.Method("vatsys.StripPanelDX:PaintStripItem");
 
         // The strip route contains only the waypoints, starting at the last overflown waypoint.
@@ -223,6 +226,7 @@ public static class HoldPatches
                     return;
 
                 var arrivalSegment = CreateStripSegment(fdr, holdSegment, arrivalEto, arrivalAto);
+                arrivalSegment.Tag = ArrivalSegmentTag;
 
                 // The hold point has an ATO when the hold started after the aircraft crossed the
                 // hold point. The strip shows the ATO before the ETO, thus the exit time must go on
@@ -291,6 +295,38 @@ public static class HoldPatches
                 ETONoEvent = eto,
                 ATONoEvent = ato
             };
+        }
+    }
+
+    /// <summary>
+    ///     In a hold, add "A" to the arrival time of the hold point on the strip, and "D" to the
+    ///     exit time. PaintStripItemPatch puts the arrival copy of the hold point in the route.
+    /// </summary>
+    [HarmonyPatch]
+    static class GetItemTextPatch
+    {
+        static MethodBase TargetMethod() => AccessTools.Method("vatsys.StripPanelDX:GetItemText");
+
+        static void Postfix(StripItem item, IList<FDP2.FDR.ExtractedRoute.Segment> rte, ref string __result)
+        {
+            try
+            {
+                if (item.Type != StripItemType.ETOP || !item.PointIndexSpecified || item.PointIndex >= rte.Count)
+                    return;
+
+                if (rte[item.PointIndex].Tag == PaintStripItemPatch.ArrivalSegmentTag)
+                {
+                    __result += " A";
+                    return;
+                }
+
+                if (item.PointIndex > 0 && rte[item.PointIndex - 1].Tag == PaintStripItemPatch.ArrivalSegmentTag)
+                    __result += " D";
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+            }
         }
     }
 
