@@ -20,9 +20,13 @@ public class SetHoldDelayHandler(HoldService holdService, WorkQueue workQueue, I
                     return;
 
                 if (request.Delay == TimeSpan.Zero)
+                {
                     holdService.RemoveDelay(fdr, request.WaypointName);
+                }
                 else
+                {
                     holdService.SetDelay(fdr, DelayType.Delay, request.WaypointName, request.Delay);
+                }
             }
             catch (Exception ex)
             {

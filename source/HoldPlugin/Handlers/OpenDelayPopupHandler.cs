@@ -19,6 +19,7 @@ public class OpenDelayPopupHandler(IGuiInvoker guiInvoker, IMediator mediator, I
             var view = new DelayPopup(viewModel);
             var form = new PopupForm(view);
 
+            // TODO: We should move this into the popup itself
             view.CloseRequested += (_, _) => form.Close();
             form.Shown += (_, _) => view.FocusDelayDuration();
 

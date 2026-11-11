@@ -37,33 +37,42 @@ public class OpenHoldExitMenuHandler(
                     90, //int TimeCountMax = 90
                 ]) as BaseForm;
 
-            window.Text = holdItem.Callsign;
-            window.StartPosition = FormStartPosition.Manual;
-            window.Location = Cursor.Position;
-            MMI.EnsureWindowVisible((Form)window);
-            window.ShowDialog();
+            if (window is null)
+                return Task.CompletedTask;
 
-            if (window.DialogResult == DialogResult.OK)
+            try
             {
-                var selectedTime = (DateTime)window.GetType().GetField("SelectedTime").GetValue(window);
-                if (selectedTime >= DateTime.UtcNow)
-                {
-                    workQueue.Enqueue(async () =>
-                    {
-                        // The remarks contain the hold, thus change the exit time to a delay
-                        // from the arrival time.
-                        var hold = holdRepository.Find(holdItem.Callsign);
-                        var holdSegment = hold is not null ? fdr.FindHoldWaypoint(hold.HoldPoint) : null;
-                        if (hold is null || holdSegment is null ||
-                            !fdr.TryGetHoldArrivalTime(holdSegment, hold.HoldEntryTime, out var arrivalTime))
-                            return;
 
-                        holdService.SetDelay(fdr, DelayType.Hold, holdSegment.GetFlightPlanName(), selectedTime - arrivalTime);
-                    });
+                window.Text = holdItem.Callsign;
+                window.StartPosition = FormStartPosition.Manual;
+                window.Location = Cursor.Position;
+                MMI.EnsureWindowVisible((Form)window);
+                window.ShowDialog();
+
+                if (window.DialogResult == DialogResult.OK)
+                {
+                    var selectedTime = (DateTime)window.GetType().GetField("SelectedTime").GetValue(window);
+                    if (selectedTime >= DateTime.UtcNow)
+                    {
+                        workQueue.Enqueue(async () =>
+                        {
+                            // The remarks contain the hold, thus change the exit time to a delay
+                            // from the arrival time.
+                            var hold = holdRepository.Find(holdItem.Callsign);
+                            var holdSegment = hold is not null ? fdr.FindHoldWaypoint(hold.HoldPoint) : null;
+                            if (hold is null || holdSegment is null ||
+                                !fdr.TryGetHoldArrivalTime(holdSegment, hold.HoldEntryTime, out var arrivalTime))
+                                return;
+
+                            holdService.SetDelay(fdr, DelayType.Hold, holdSegment.GetFlightPlanName(), selectedTime - arrivalTime);
+                        });
+                    }
                 }
             }
-
-            window.Dispose();
+            finally
+            {
+                window.Dispose();
+            }
         }
         catch (Exception ex)
         {
