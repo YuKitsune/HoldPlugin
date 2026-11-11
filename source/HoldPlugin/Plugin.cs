@@ -208,7 +208,7 @@ public class Plugin
         if (otherHolds.Any())
         {
             _windowManager.TryCreateWindow(
-                WindowKeys.HoldOther(),
+                WindowKeys.HoldOther,
                 "HOLD OTHER WINDOW",
                 handle =>
                 {
@@ -985,7 +985,7 @@ public class Plugin
             // Close OTHER window only if no aircraft should be in it
             if (!otherHolds.Any())
             {
-                _windowManager.CloseWindow(WindowKeys.HoldOther());
+                _windowManager.CloseWindow(WindowKeys.HoldOther);
             }
 
             EnsureHoldWindowsAreOpen();
