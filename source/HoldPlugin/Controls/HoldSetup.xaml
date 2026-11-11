@@ -51,6 +51,7 @@
             <!-- Edit mode -->
             <TextBox Text="{Binding EditValue, UpdateSourceTrigger=PropertyChanged}"
                      MaxLength="11"
+                     CharacterCasing="Upper"
                      Width="104"
                      Height="24"
                      LostFocus="HoldPointTextBox_LostFocus"
@@ -92,6 +93,7 @@
             <!-- Edit mode -->
             <TextBox Text="{Binding EditValue, UpdateSourceTrigger=PropertyChanged}"
                      MaxLength="11"
+                     CharacterCasing="Upper"
                      Width="104"
                      Height="24"
                      LostFocus="HoldPointTextBox_LostFocus"
@@ -133,6 +135,7 @@
             <!-- Edit mode -->
             <TextBox Text="{Binding EditValue, UpdateSourceTrigger=PropertyChanged}"
                      MaxLength="11"
+                     CharacterCasing="Upper"
                      Width="104"
                      Height="24"
                      LostFocus="HoldPointTextBox_LostFocus"
@@ -174,6 +177,7 @@
             <!-- Edit mode -->
             <TextBox Text="{Binding EditValue, UpdateSourceTrigger=PropertyChanged}"
                      MaxLength="11"
+                     CharacterCasing="Upper"
                      Width="104"
                      Height="24"
                      LostFocus="HoldPointTextBox_LostFocus"
