@@ -2,6 +2,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Messaging;
 using HoldPlugin.Contracts;
+using vatSysToolbox.Windows;
 
 namespace HoldPlugin.ViewModels;
 
@@ -10,7 +11,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
     readonly HoldRepository _holdRepository;
     readonly HoldSlotRepository _holdSlotRepository;
     readonly IWindowHandle _windowHandle;
-    readonly GuiInvoker _guiInvoker;
+    readonly IGuiInvoker _guiInvoker;
     
     [ObservableProperty] string _holdPointName = "";
     [ObservableProperty] ObservableCollection<HoldItemViewModel> _items = [];
@@ -51,7 +52,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
     }
 #endif
 
-    public HoldListViewModel(string pointName, HoldItem[] items, HoldRepository holdRepository, HoldSlotRepository holdSlotRepository, IWindowHandle windowHandle, GuiInvoker guiInvoker)
+    public HoldListViewModel(string pointName, HoldItem[] items, HoldRepository holdRepository, HoldSlotRepository holdSlotRepository, IWindowHandle windowHandle, IGuiInvoker guiInvoker)
     {
         _holdRepository = holdRepository;
         _holdSlotRepository = holdSlotRepository;
@@ -66,7 +67,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
 
     public void Receive(RefreshHoldsCommand message)
     {
-        _guiInvoker.InvokeOnUiThread(_ => Refresh(_holdRepository.GetHolds()));
+        _guiInvoker.InvokeOnGUI(_ => Refresh(_holdRepository.GetHolds()));
     }
 
     // The holds can change between the time the window is requested and the time it is shown.

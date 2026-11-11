@@ -21,14 +21,15 @@ using Serilog;
     GitHubActionsImage.WindowsLatest,
     OnPushBranches = ["main"],
     OnPullRequestBranches = ["main"],
-    InvokedTargets = [nameof(Compile)],
+    InvokedTargets = [nameof(AddNuGetSource), nameof(Compile)],
+    ImportSecrets = [nameof(NuGetUsername), nameof(NuGetToken)],
     FetchDepth = 0)]
 [GitHubActions(
     "release",
     GitHubActionsImage.WindowsLatest,
     OnPushTags = ["v*"],
-    InvokedTargets = [nameof(Release)],
-    ImportSecrets = [nameof(GitHubToken)],
+    InvokedTargets = [nameof(AddNuGetSource), nameof(Release)],
+    ImportSecrets = [nameof(GitHubToken), nameof(NuGetUsername), nameof(NuGetToken)],
     EnableGitHubToken = true,
     FetchDepth = 0,
     WritePermissions = [GitHubActionsPermissions.Contents])]
@@ -52,11 +53,22 @@ class Build : FalloutBuild
     [Secret]
     readonly string GitHubToken;
 
+    [Parameter("GitHub username for the NuGet feed")]
+    readonly string NuGetUsername;
+
+    [Parameter("GitHub personal access token (classic) with the read:packages scope, for the NuGet feed")]
+    [Secret]
+    readonly string NuGetToken;
+
     [GitRepository]
     readonly GitRepository GitRepository;
 
     [GitVersion]
     readonly GitVersion GitVersion;
+
+    // The NuGet feed that contains the vatSysToolbox package
+    const string NuGetSourceName = "YuKitsune";
+    const string NuGetSourceUrl = "https://nuget.pkg.github.com/YuKitsune/index.json";
 
     const string ReleasePluginName = "HoldPlugin";
     const string DebugPluginName = "HoldPlugin - Debug";
@@ -126,8 +138,43 @@ class Build : FalloutBuild
             Log.Information("vatSys.exe extracted to {Path}", VatSysExePath);
         });
 
+    Target AddNuGetSource => _ => _
+        .Description("Adds the GitHub Packages NuGet feed with the GitHub credentials, or updates the credentials.")
+        .Requires(() => NuGetUsername)
+        .Requires(() => NuGetToken)
+        .Executes(() =>
+        {
+            // The .NET CLI can encrypt the password only on Windows
+            var storePasswordInClearText = !OperatingSystem.IsWindows();
+
+            var sourceExists = DotNetTasks.DotNet("nuget list source", logOutput: false)
+                .Any(o => o.Text.Contains(NuGetSourceUrl));
+
+            if (sourceExists)
+            {
+                Log.Information("Updating the credentials of the NuGet source {Name}", NuGetSourceName);
+                DotNetTasks.DotNetNuGetUpdateSource(s => s
+                    .SetName(NuGetSourceName)
+                    .SetSource(NuGetSourceUrl)
+                    .SetUsername(NuGetUsername)
+                    .SetPassword(NuGetToken)
+                    .SetStorePasswordInClearText(storePasswordInClearText));
+            }
+            else
+            {
+                Log.Information("Adding the NuGet source {Name}", NuGetSourceName);
+                DotNetTasks.DotNetNuGetAddSource(s => s
+                    .SetName(NuGetSourceName)
+                    .SetSource(NuGetSourceUrl)
+                    .SetUsername(NuGetUsername)
+                    .SetPassword(NuGetToken)
+                    .SetStorePasswordInClearText(storePasswordInClearText));
+            }
+        });
+
     Target Compile => _ => _
         .DependsOn(DownloadVatSys)
+        .After(AddNuGetSource)
         .Executes(() =>
         {
             var version = GetSemanticVersion();

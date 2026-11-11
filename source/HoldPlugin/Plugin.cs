@@ -5,8 +5,13 @@ using CommunityToolkit.Mvvm.Messaging;
 using HoldPlugin.Contracts;
 using HoldPlugin.Controls;
 using HoldPlugin.ViewModels;
+using Microsoft.Extensions.DependencyInjection;
 using vatsys;
 using vatsys.Plugin;
+using vatSysToolbox;
+using vatSysToolbox.Extensions;
+using vatSysToolbox.Messaging;
+using vatSysToolbox.Windows;
 using Track = vatsys.Track;
 
 namespace HoldPlugin;
@@ -43,7 +48,17 @@ public class Plugin
     public const string Name = "Hold Plugin";
 #endif
 
-    readonly ErrorReporter _errorReporter = new();
+    /// <summary>
+    /// The name that other plugins use to send messages to this plugin.
+    /// </summary>
+    public const string MailboxName = "dev.eoinmotherway.hold";
+
+    // The messages that the plugin sends have no data
+    static readonly MessageContent EmptyContent = new("application/json", "{}"u8.ToArray());
+
+    readonly IErrorReporter _errorReporter;
+    readonly IGuiInvoker _guiInvoker;
+    readonly IPluginMessenger _messenger;
 
     // Do all work that changes the plugin state on this queue. The queue does one work item at a
     // time, so the work items do not need a lock.
@@ -60,11 +75,17 @@ public class Plugin
 
     public Plugin()
     {
-        _workQueue = new WorkQueue(_errorReporter.ReportError);
+        var serviceProvider = new ServiceCollection()
+            .AddLogging()
+            .AddVatSysToolbox(Name, MailboxName)
+            .BuildServiceProvider();
 
-        var guiInvoker = new GuiInvoker(MMI.InvokeOnGUI, _errorReporter.ReportError);
-        _windowManager = new WindowManager(guiInvoker);
-        
+        _errorReporter = serviceProvider.GetRequiredService<IErrorReporter>();
+        _guiInvoker = serviceProvider.GetRequiredService<IGuiInvoker>();
+        _messenger = serviceProvider.GetRequiredService<IPluginMessenger>();
+        _workQueue = serviceProvider.GetRequiredService<WorkQueue>();
+        _windowManager = serviceProvider.GetRequiredService<WindowManager>();
+
         WeakReferenceMessenger.Default.Register<DesignateAircraftCommand>(this);
         WeakReferenceMessenger.Default.Register<CancelHoldCommand>(this);
         WeakReferenceMessenger.Default.Register<OpenClearedLevelMenuCommand>(this);
@@ -85,6 +106,14 @@ public class Plugin
         FDP2.FDRsChanged += OnFDRsChanged;
 
         CreateMenuItems();
+
+        // The messenger receives the messages on a background thread
+        _messenger.Subscribe(HoldMessages.ToggleSetupWindow, (_, _) =>
+        {
+            ToggleHoldSetup();
+            return Task.CompletedTask;
+        });
+        _messenger.Start();
     }
 
     void CreateMenuItems()
@@ -103,13 +132,41 @@ public class Plugin
         _windowManager.TryCreateWindow(
             WindowKeys.HoldSetup,
             "Hold Setup",
-            _ =>
+            windowHandle =>
             {
-                var viewModel = new HoldSetupViewModel(_holdSlotRepository, new GuiInvoker(MMI.InvokeOnGUI, _errorReporter.ReportError), _errorReporter);
+                windowHandle.Closed += (_, _) => _ = Broadcast(HoldMessages.SetupWindowClosed);
+                _ = Broadcast(HoldMessages.SetupWindowOpened);
+
+                var viewModel = new HoldSetupViewModel(_holdSlotRepository, _guiInvoker, _errorReporter);
                 var view = new HoldSetup(viewModel);
                 return view;
             },
             canMinimise: false);
+    }
+
+    void ToggleHoldSetup()
+    {
+        _guiInvoker.InvokeOnGUI(_ =>
+        {
+            if (_windowManager.TryGetWindow(WindowKeys.HoldSetup, out _))
+                _windowManager.CloseWindow(WindowKeys.HoldSetup);
+            else
+                OpenHoldSetup();
+        });
+    }
+
+    // Tells the other plugins (for example, the HLD SET button of the Eurocat Menus plugin) that a window opened or
+    // closed
+    async Task Broadcast(string messageType)
+    {
+        try
+        {
+            await _messenger.Broadcast(messageType, EmptyContent);
+        }
+        catch (Exception ex)
+        {
+            _errorReporter.ReportError(ex, $"Cannot send the message {messageType}");
+        }
     }
 
     void EnsureHoldWindowsAreOpen()
@@ -135,11 +192,11 @@ public class Plugin
                     $"HOLD {holdPointName} WINDOW",
                     handle =>
                     {
-                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, _holdRepository, _holdSlotRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, _errorReporter.ReportError));
+                        var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, _holdRepository, _holdSlotRepository, handle, _guiInvoker);
                         var view = new HoldList(viewModel);
                         return view;
                     },
-                    shrinkToContent: false,
+                    sizeToContent: false,
                     canClose: false,
                     canMinimise: false,
                     new Size(480, 150));
@@ -157,11 +214,11 @@ public class Plugin
                 "HOLD OTHER WINDOW",
                 handle =>
                 {
-                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, _holdRepository, _holdSlotRepository, handle, new GuiInvoker(MMI.InvokeOnGUI, _errorReporter.ReportError));
+                    var viewModel = new HoldListViewModel(string.Empty, otherHolds, _holdRepository, _holdSlotRepository, handle, _guiInvoker);
                     var view = new HoldList(viewModel);
                     return view;
                 },
-                shrinkToContent: false,
+                sizeToContent: false,
                 canClose: false,
                 canMinimise: false,
                 new Size(480, 150));
@@ -883,7 +940,7 @@ public class Plugin
 
     public void Receive(OpenDelayPopupCommand message)
     {
-        new GuiInvoker(MMI.InvokeOnGUI, _errorReporter.ReportError).InvokeOnUiThread(mainForm =>
+        _guiInvoker.InvokeOnGUI(mainForm =>
         {
             var viewModel = new DelayPopupViewModel(message.Callsign, message.WaypointName, message.Delay);
             var view = new DelayPopup(viewModel);

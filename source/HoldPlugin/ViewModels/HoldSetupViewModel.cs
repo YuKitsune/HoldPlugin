@@ -2,13 +2,15 @@
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
 using HoldPlugin.Contracts;
+using vatSysToolbox;
+using vatSysToolbox.Windows;
 
 namespace HoldPlugin.ViewModels;
 
 public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlotsUpdatedCommand>
 {
     readonly HoldSlotRepository _holdSlotRepository;
-    readonly GuiInvoker _guiInvoker;
+    readonly IGuiInvoker _guiInvoker;
     readonly IErrorReporter _errorReporter;
 
     [ObservableProperty] HoldButtonViewModel _button1;
@@ -16,7 +18,7 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
     [ObservableProperty] HoldButtonViewModel _button3;
     [ObservableProperty] HoldButtonViewModel _button4;
 
-    public HoldSetupViewModel(HoldSlotRepository holdSlotRepository, GuiInvoker guiInvoker, IErrorReporter errorReporter)
+    public HoldSetupViewModel(HoldSlotRepository holdSlotRepository, IGuiInvoker guiInvoker, IErrorReporter errorReporter)
     {
         _holdSlotRepository = holdSlotRepository;
         _guiInvoker = guiInvoker;
@@ -34,7 +36,7 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
 
     public void Receive(HoldSlotsUpdatedCommand message)
     {
-        _guiInvoker.InvokeOnUiThread(_ =>
+        _guiInvoker.InvokeOnGUI(_ =>
         {
             var descriptors = _holdSlotRepository.GetSlots();
             Button1.HoldPointName = descriptors[0].GetHoldPointName();
@@ -107,7 +109,7 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
             if (!string.IsNullOrWhiteSpace(trimmedValue) &&
                 _parent.IsHoldPointNameTaken(trimmedValue, _index))
             {
-                _errorReporter.ReportError($"Hold Window for {trimmedValue} already exists");
+                _errorReporter.ReportError(new Exception($"Hold Window for {trimmedValue} already exists"));
                 
                 IsEditing = false;
                 EditValue = "";

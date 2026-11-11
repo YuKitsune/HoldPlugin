@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.Messaging;
 using HarmonyLib;
 using HoldPlugin.Contracts;
 using vatsys;
+using vatSysToolbox;
 
 namespace HoldPlugin;
 

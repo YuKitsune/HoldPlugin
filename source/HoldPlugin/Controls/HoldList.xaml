@@ -3,10 +3,11 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-             xmlns:local="clr-namespace:HoldPlugin"
+             xmlns:toolbox="clr-namespace:vatSysToolbox;assembly=vatSysToolbox"
+             xmlns:toolboxControls="clr-namespace:vatSysToolbox.Controls;assembly=vatSysToolbox"
              xmlns:viewModels="clr-namespace:HoldPlugin.ViewModels"
              xmlns:converters="clr-namespace:HoldPlugin.Converters"
-             Background="{x:Static local:Theme.BackgroundColor}"
+             Background="{toolbox:VatSysColour WindowBackground}"
              d:DataContext="{d:DesignInstance Type=viewModels:HoldListViewModel}"
              mc:Ignorable="d"
              d:DesignHeight="150" d:DesignWidth="480"
@@ -15,8 +16,11 @@
     <UserControl.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="/HoldPlugin;component/Styles.xaml" />
+                <ResourceDictionary Source="/vatSysToolbox;component/Styles.xaml" />
             </ResourceDictionary.MergedDictionaries>
+
+            <converters:InvertedBoolToHiddenConverter x:Key="InvertedBoolToHiddenConverter"/>
+            <converters:HoldItemStateToColorConverter x:Key="HoldItemStateToColorConverter"/>
         </ResourceDictionary>
     </UserControl.Resources>
     
@@ -24,19 +28,19 @@
         <ItemsControl ItemsSource="{Binding Items}">
             <ItemsControl.ItemContainerStyle>
                 <Style>
-                    <Setter Property="FrameworkElement.Margin" Value="{x:Static local:Theme.BeveledBorderThickness}"/>
+                    <Setter Property="FrameworkElement.Margin" Value="{x:Static toolboxControls:Bevel.BorderThickness}"/>
                 </Style>
             </ItemsControl.ItemContainerStyle>
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
 
                     <Border
-                        Background="{x:Static local:Theme.ItemBackgroundColor}"
+                        Background="{toolbox:VatSysColour StripBackground}"
                         BorderThickness="2"
                         HorizontalAlignment="Left">
                         <Border.Style>
                             <Style TargetType="Border">
-                                <Setter Property="BorderBrush" Value="{x:Static local:Theme.StripTextColor}"/>
+                                <Setter Property="BorderBrush" Value="{toolbox:VatSysColour StripText}"/>
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsDesignated}" Value="True">
                                         <Setter Property="BorderBrush" Value="{Binding State, Converter={StaticResource HoldItemStateToColorConverter}}"/>
@@ -94,7 +98,7 @@
                                            MouseDown="Acid_MouseDown"/>
                                 
                                 <!-- Level -->
-                                <TextBlock Grid.Column="2" Text="{Binding DisplayLevel}" Foreground="{x:Static local:Theme.StripTextColor}" Padding="16,0,0,0"/>
+                                <TextBlock Grid.Column="2" Text="{Binding DisplayLevel}" Foreground="{toolbox:VatSysColour StripText}" Padding="16,0,0,0"/>
                                 
                                 <!-- CFL -->
                                 <TextBlock Grid.Column="3"
@@ -111,11 +115,11 @@
                                 <TextBlock Grid.Column="5" Text="{Binding DisplayHoldEntryTime}" Foreground="{Binding State, Converter={StaticResource HoldItemStateToColorConverter}}" Padding="8,0,0,0"/>
                             </Grid>
                         
-                            <Border Grid.Column="1" BorderBrush="{x:Static local:Theme.StripTextColor}" BorderThickness="2,0,2,0" Padding="4">
+                            <Border Grid.Column="1" BorderBrush="{toolbox:VatSysColour StripText}" BorderThickness="2,0,2,0" Padding="4">
                                 
                                 <!-- Hold Departure Time -->
                                 <TextBlock Text="{Binding DisplayHoldExitTime}"
-                                           Foreground="{x:Static local:Theme.StripTextColor}"
+                                           Foreground="{toolbox:VatSysColour StripText}"
                                            Background="Transparent"
                                            MouseLeftButtonUp="HoldExit_MouseLeftButtonUp"/>
                             </Border>
@@ -125,7 +129,7 @@
                                 <Grid MinWidth="120">
                                     <!-- Display mode -->
                                     <TextBlock Text="{Binding DisplayGlobalOps}"
-                                               Foreground="{x:Static local:Theme.StripTextColor}"
+                                               Foreground="{toolbox:VatSysColour StripText}"
                                                Background="Transparent"
                                                MouseLeftButtonUp="GlobalOps_MouseLeftButtonUp">
                                         <TextBlock.Style>

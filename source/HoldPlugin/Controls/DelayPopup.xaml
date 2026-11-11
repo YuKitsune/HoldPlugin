@@ -3,9 +3,9 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-             xmlns:local="clr-namespace:HoldPlugin"
+             xmlns:toolbox="clr-namespace:vatSysToolbox;assembly=vatSysToolbox"
              xmlns:viewModels="clr-namespace:HoldPlugin.ViewModels"
-             Background="{x:Static local:Theme.BackgroundColor}"
+             Background="{toolbox:VatSysColour WindowBackground}"
              d:DataContext="{d:DesignInstance Type=viewModels:DelayPopupViewModel}"
              mc:Ignorable="d"
              Height="64"
@@ -13,7 +13,7 @@
     <UserControl.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="/HoldPlugin;component/Styles.xaml" />
+                <ResourceDictionary Source="/vatSysToolbox;component/Styles.xaml" />
             </ResourceDictionary.MergedDictionaries>
             
             <Style TargetType="Button" BasedOn="{StaticResource ButtonBaseStyle}">
@@ -21,13 +21,11 @@
                 <Setter Property="Height" Value="24"/>
             </Style>
             
-            <Style TargetType="TextBlock" BasedOn="{StaticResource TextBaseStyle}">
-                <Setter Property="Foreground" Value="{x:Static local:Theme.GenericTextColor}"/>
-            </Style>
+            <Style TargetType="TextBlock" BasedOn="{StaticResource GenericTextStyle}" />
             
         </ResourceDictionary>
     </UserControl.Resources>
-    <Border BorderThickness="2" BorderBrush="{x:Static local:Theme.GenericTextColor}">
+    <Border BorderThickness="2" BorderBrush="{toolbox:VatSysColour GenericText}">
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
