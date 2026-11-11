@@ -18,43 +18,75 @@
 
 ### Initiating a Hold
 
-A hold can be initiated in one of two ways:
-1. Select the aircraft, move your mouse to the position you want them to hold, and press the `F8` key.
-2. Right-click on the ETO field in the strip, enter the hold duration (in `HHMM` format), then press `ENTER`.
+You can initiate a hold in one of these ways:
 
-> [NOTE]
-> For compatibility with older older versions of the plugin, holds can also be initiated by typing `H\RIVET` into the label data, where `RIVET` is the name of the holding waypoint.
-> The waypoint name can be shortened to as little as three characters (e.g. `H/RIV`).
-> An exit time can be specified by appending it to the holding point name, e.g. `H\RIVET\29` to depart `RIVET` at 29-minutes past the hour.
+1. Select the aircraft, put the mouse cursor on the position where the aircraft must hold, then press `F8`.
+   - If the cursor is near a waypoint on the route, the hold is at that waypoint.
+   - If the cursor is not near a waypoint on the route, the aircraft goes direct to the cursor position, holds there, then goes to the waypoint on the route that is nearest to the hold.
+   - The hold has a default delay of 10 minutes.
+2. Right-click the ETO of a waypoint in the strip. Type the delay in the `HHMM` format, then press `ENTER`. If you type one or two digits, the plugin uses them as minutes.
+
+You can change the `F8` key in `Settings` > `Keyboard`.
+
+A hold shows only when the hold point is the next waypoint.
+If you initiate a hold at a waypoint that is further along the route, the hold starts when the aircraft passes the waypoint before it.
+
+> [!NOTE]
+> You must have permission to change the flight plan (e.g. you have jurisdiction of the aircraft). If not, the `F8` key and the delay popup do nothing.
+
+> [!NOTE]
+> For compatibility with older versions of the plugin, you can also initiate a hold in the label data. Type `H/RIVET` or `H\RIVET`, where `RIVET` is the name of the hold point.
+> You can shorten the waypoint name to three characters (e.g. `H/RIV`).
+> To give an exit time, add the minutes past the hour after the hold point name. For example, `H/RIVET/29` makes the aircraft leave `RIVET` at 29 minutes past the hour. If there is no exit time, the exit time is 10 minutes after the ETO of the hold point.
+> A hold in the label data starts immediately. It does not wait until the hold point is the next waypoint.
+
+### Strip
+
+When an aircraft holds, the hold point shows two times in the strip:
+
+- The first time shows the time of arrival at the hold point, with an `A`. Before the aircraft gets to the hold point, this is the ETO. After the aircraft gets to the hold point, this is the ATO.
+- The second time shows the hold exit time, with a `D`.
+
+![Hold Strip](./hold-strip.png)
+
+When the aircraft is in the hold, the strip starts at the hold point.
 
 ### Hold List
 
 ![Hold Window](./hold-list.png)
 
-The hold list displays flights ordered by their CFL.
+The hold list shows the flights ordered by their CFL.
 
-When a block clearance has been issued, the CFL is displayed as `xxxByyy`, where `xxx` is the lower level, and `yyy` is the upper level.
+When a block clearance has been issued, the CFL shows as `xxxByyy`, where `xxx` is the lower level, and `yyy` is the upper level.
 
-An `X` will be displayed if the aircraft is non-RVSM.
+An `X` shows if the aircraft is non-RVSM.
 
-The hold entry and exit times are displayed in the label. The exit can be adjusted by clicking on it to select a new exit time.
+The label shows the hold entry and exit times. To change the exit time, click it, then select a new exit time.
 
-The `OP_DATA` can also be viewed and edited from the hold label.
+You can also see and edit the `OP_DATA` from the hold label.
 
 ![Hold Diagram](./hold-diagram.png)
 
-### Modifying a hold
+### Modifying a Hold
 
-The hold can be modified in a few different ways:
-1. Right-click the ETO field of the hold point, and adjust the hold duration (in `HHMM` format), then press `ENTER`.
-2. Left-click the hold exit time in the Hold List, and select a new exit time.
+You can change a hold in one of these ways:
+
+1. Right-click the ETO of the hold point in the strip (the arrival time or the exit time). Change the delay in the `HHMM` format, then press `ENTER`.
+2. Click the hold exit time in the hold list, then select a new exit time.
 
 ### Terminating a Hold
 
-The hold can be cancelled a few different ways:
-1. Middle click the ACID in the hold list
-2. Press the `F8` key with the flight selected
-3. Re-route the flight past the waypoint
+A hold stops in one of these ways:
+
+1. Middle-click the ACID in the hold list.
+2. Select the aircraft, then press `F8`.
+3. Re-route the aircraft past the hold point.
+4. The hold stops automatically after the exit time.
+
+Methods 1 and 2 remove the delay from the remarks.
+
+> [!NOTE]
+> Methods 3 and 4 apply only to holds that are in the remarks (see [How it works](#how-it-works)). To stop a hold that is only in the label data, remove it from the label data.
 
 ### Configuring Lists
 
@@ -67,6 +99,20 @@ Any aircraft holding at a waypoint when all 4 lists are already occupied will be
 ![All Windows](./all-windows.png)
 
 ## How it works
+
+The plugin keeps each hold in the remarks of the flight plan, in the standard `DLE/` format: `DLE/[waypoint][HHMM]`, where `HHMM` is the length of the delay. For example, `DLE/TARAL0020` is a delay of 20 minutes at `TARAL`. The plugin also reads a `DLE/` that the pilot put in the flight plan (e.g. for aerial work).
+
+The remarks can have more than one delay. The plugin uses the first delay along the route from the present position of the aircraft. A delay is active only when its waypoint is the next waypoint.
+
+The exit time is the arrival time at the hold point plus the delay. Before the aircraft gets to the hold point, the exit time changes when the ETO changes.
+
+While the hold is active:
+
+- vatSys does not move the aircraft along its route past the hold point.
+- vatSys calculates the ETOs after the hold point from the exit time.
+- vatSys does not show a RAM alert for the aircraft.
+
+If the remarks and the label data do not agree, the plugin uses the remarks.
 
 ## Installation
 
