@@ -148,7 +148,7 @@ public class Plugin
     {
         _guiInvoker.InvokeOnGUI(_ =>
         {
-            if (_windowManager.TryGetWindow(WindowKeys.HoldSetup, out _))
+            if (_windowManager.TryGetWindow(WindowKeys.HoldSetup, out var _))
                 _windowManager.CloseWindow(WindowKeys.HoldSetup);
             else
                 OpenHoldSetup();
