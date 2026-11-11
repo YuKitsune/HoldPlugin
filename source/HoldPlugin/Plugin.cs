@@ -26,6 +26,7 @@ public class Plugin
     IRecipient<OpenDelayPopupCommand>,
     IRecipient<SetHoldDelayCommand>,
     IRecipient<HoldCompletedCommand>,
+    IRecipient<HoldKeyPressedCommand>,
     IRecipient<HoldPointAddedCommand>,
     IRecipient<HoldPointRemovedCommand>,
     IRecipient<RefreshHoldsCommand>
@@ -50,6 +51,7 @@ public class Plugin
 
     readonly HoldRepository _holdRepository = new();
     readonly HoldSlotRepository _holdSlotRepository = new();
+    readonly KeySettings _keySettings = new();
     readonly Dictionary<string, FDP2.FDR> _subscribedFDRs = new();
 
     readonly WindowManager _windowManager;
@@ -71,10 +73,12 @@ public class Plugin
         WeakReferenceMessenger.Default.Register<OpenDelayPopupCommand>(this);
         WeakReferenceMessenger.Default.Register<SetHoldDelayCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldCompletedCommand>(this);
+        WeakReferenceMessenger.Default.Register<HoldKeyPressedCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldPointAddedCommand>(this);
         WeakReferenceMessenger.Default.Register<HoldPointRemovedCommand>(this);
         WeakReferenceMessenger.Default.Register<RefreshHoldsCommand>(this);
 
+        HoldKeyPatches.Initialize(_keySettings, _errorReporter);
         HoldPatches.Apply(Name, _holdRepository, _errorReporter);
 
         MMI.SelectedTrackChanged += OnSelectedTrackChanged;
@@ -351,10 +355,10 @@ public class Plugin
         int? exitTimeMinutes = null;
         TimeSpan? delay = null;
         bool hasHold;
-        if (TryFindActiveDelay(fdr, delayRemarks, out var activeDelay))
+        if (TryFindActiveDelay(fdr, delayRemarks, out var activeDelay, out var delayWaypoint))
         {
             hasHold = true;
-            holdPointPrefix = activeDelay.WaypointName;
+            holdPointPrefix = delayWaypoint.Intersection.Name;
             delay = activeDelay.Delay;
         }
         else
@@ -395,9 +399,14 @@ public class Plugin
     ///     present position is then always at the next waypoint. Ignore the delays at hold points
     ///     that the aircraft left.
     /// </summary>
-    bool TryFindActiveDelay(FDP2.FDR fdr, DelayRemark[] delayRemarks, out DelayRemark activeDelay)
+    bool TryFindActiveDelay(
+        FDP2.FDR fdr,
+        DelayRemark[] delayRemarks,
+        out DelayRemark activeDelay,
+        out FDP2.FDR.ExtractedRoute.Segment delayWaypoint)
     {
         activeDelay = null!;
+        delayWaypoint = null!;
 
         var nextWaypoint = fdr.ParsedRoute.ToList()
             .Skip(Math.Max(fdr.ParsedRoute.OverflownIndex + 1, 0))
@@ -405,11 +414,13 @@ public class Plugin
         if (nextWaypoint is null)
             return false;
 
-        var delayRemark = delayRemarks.FirstOrDefault(d => d.WaypointName == nextWaypoint.Intersection.Name);
+        var nextWaypointName = nextWaypoint.GetFlightPlanName();
+        var delayRemark = delayRemarks.FirstOrDefault(d => d.WaypointName == nextWaypointName);
         if (delayRemark is null || _holdRepository.IsCompleted(fdr.Callsign, delayRemark.WaypointName))
             return false;
 
         activeDelay = delayRemark;
+        delayWaypoint = nextWaypoint;
         return true;
     }
 
@@ -418,7 +429,7 @@ public class Plugin
     static bool HasDelayAtHoldPoint(FDP2.FDR fdr, DelayRemark[] delayRemarks, string holdPointPrefix)
     {
         var holdSegment = fdr.FindHoldWaypoint(holdPointPrefix);
-        return holdSegment is not null && delayRemarks.Any(d => d.WaypointName == holdSegment.Intersection.Name);
+        return holdSegment is not null && delayRemarks.Any(d => d.WaypointName == holdSegment.GetFlightPlanName());
     }
 
     void InitiateHold(FDP2.FDR fdr, string holdPointPrefix, DateTime? holdExitTime, TimeSpan? delay)
@@ -532,8 +543,33 @@ public class Plugin
     }
 
     /// <summary>
+    ///     Remove the delay at the hold point from the remarks and the hold from the label data,
+    ///     then stop the hold. Without permission, the plugin cannot remove the delay from the
+    ///     remarks, and the delay would initiate the hold again. Then do nothing.
+    /// </summary>
+    void CancelHold(FDP2.FDR? fdr, HoldItem hold)
+    {
+        if (fdr is not null)
+        {
+            var holdPointName = fdr.FindHoldWaypoint(hold.HoldPoint)?.GetFlightPlanName() ?? hold.HoldPoint;
+            if (DelayRemarks.HasDelay(fdr, holdPointName))
+            {
+                if (!fdr.HavePermission)
+                    return;
+
+                DelayRemarks.Remove(fdr, holdPointName);
+            }
+
+            RemoveHoldFromLabel(fdr);
+        }
+
+        RemoveHold(fdr, hold);
+    }
+
+    /// <summary>
     ///     Set the delay at the waypoint in the remarks, then initiate or update the hold from it.
-    ///     Do nothing when the controller does not have permission to change the flight plan.
+    ///     <paramref name="waypointName"/> is the name in the flight plan route. Do nothing when
+    ///     the controller does not have permission to change the flight plan.
     /// </summary>
     void SetDelay(FDP2.FDR fdr, string waypointName, TimeSpan delay)
     {
@@ -733,22 +769,7 @@ public class Plugin
                 return;
 
             var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == hold.Callsign);
-            if (fdr is not null)
-            {
-                // Without permission, the plugin cannot remove the delay from the remarks, and the
-                // delay would initiate the hold again.
-                if (DelayRemarks.HasDelay(fdr, hold.HoldPoint))
-                {
-                    if (!fdr.HavePermission)
-                        return;
-
-                    DelayRemarks.Remove(fdr, hold.HoldPoint);
-                }
-
-                RemoveHoldFromLabel(fdr);
-            }
-
-            RemoveHold(fdr, hold);
+            CancelHold(fdr, hold);
 
             WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
         });
@@ -811,7 +832,7 @@ public class Plugin
                             !fdr.TryGetHoldArrivalTime(holdSegment, hold.HoldEntryTime, out var arrivalTime))
                             return;
 
-                        SetDelay(fdr, hold.HoldPoint, selectedTime - arrivalTime);
+                        SetDelay(fdr, holdSegment.GetFlightPlanName(), selectedTime - arrivalTime);
                     });
                 }
             }
@@ -905,6 +926,111 @@ public class Plugin
                 _errorReporter.ReportError(ex);
             }
         });
+    }
+
+    /// <summary>
+    ///     If the aircraft is in a hold, cancel the hold. Otherwise, initiate a hold with the
+    ///     default delay at the waypoint near the position. If no waypoint ahead is near the
+    ///     position, route the aircraft direct to the position, and hold there.
+    /// </summary>
+    public void Receive(HoldKeyPressedCommand message)
+    {
+        _workQueue.Enqueue(async () =>
+        {
+            try
+            {
+                var fdr = FDP2.GetFDRs.FirstOrDefault(f => f.Callsign == message.Callsign);
+                if (fdr is null)
+                    return;
+
+                var hold = _holdRepository.Find(message.Callsign);
+                if (hold is not null)
+                {
+                    CancelHold(fdr, hold);
+                    WeakReferenceMessenger.Default.Send(new RefreshHoldsCommand());
+                    return;
+                }
+
+                if (!fdr.HavePermission)
+                    return;
+
+                var holdPointName = FindWaypointAhead(fdr, message.Position, message.DistanceTolerance)?.GetFlightPlanName()
+                    ?? RerouteDirectTo(fdr, message.Position, message.DistanceTolerance);
+                if (holdPointName is null)
+                    return;
+
+                SetDelay(fdr, holdPointName, DefaultHoldDuration);
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+            }
+        });
+    }
+
+    static FDP2.FDR.ExtractedRoute.Segment[] GetWaypointsAhead(FDP2.FDR fdr) =>
+        fdr.ParsedRoute.ToList()
+            .Skip(Math.Max(fdr.ParsedRoute.OverflownIndex + 1, 0))
+            .Where(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT)
+            .ToArray();
+
+    // Find the nearest waypoint ahead of the aircraft that is in the distance tolerance of the position.
+    static FDP2.FDR.ExtractedRoute.Segment? FindWaypointAhead(FDP2.FDR fdr, Coordinate position, double distanceTolerance) =>
+        GetWaypointsAhead(fdr)
+            .Select(s => (Segment: s, Distance: Conversions.CalculateDistance(s.Intersection.LatLong, position)))
+            .Where(s => s.Distance < distanceTolerance)
+            .OrderBy(s => s.Distance)
+            .Select(s => s.Segment)
+            .FirstOrDefault();
+
+    /// <summary>
+    ///     Route the aircraft direct to the position, then to the waypoint ahead that is nearest to
+    ///     the position. This is the same as the graphical reroute tool, when the reroute starts at
+    ///     the aircraft (see MMI.FinishGraphicReroute). Returns the name of the new waypoint at the
+    ///     position in the flight plan route, or null if there is no waypoint ahead.
+    /// </summary>
+    static string? RerouteDirectTo(FDP2.FDR fdr, Coordinate position, double distanceTolerance)
+    {
+        var rejoinWaypoint = GetWaypointsAhead(fdr)
+            .OrderBy(s => Conversions.CalculateDistance(s.Intersection.LatLong, position))
+            .FirstOrDefault();
+        if (rejoinWaypoint is null)
+            return null;
+
+        var newRoute = new FDP2.FDR.ExtractedRoute(fdr);
+
+        var aircraftPosition = fdr.GetLocation();
+        var startSegment = new FDP2.FDR.ExtractedRoute.Segment(newRoute)
+        {
+            Type = FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.REROUTE,
+            Intersection = new Airspace2.Intersection(Conversions.ConvertToStripLatLong(aircraftPosition), aircraftPosition)
+        };
+        startSegment.Intersection.FullName = Conversions.ConvertToFlightplanLatLong(aircraftPosition);
+        startSegment.ATO = DateTime.UtcNow;
+        startSegment.PCL = fdr.PRL != -1 || fdr.CFLUpper == -1
+            ? (fdr.PRL == -1 ? fdr.RFL : fdr.PRL)
+            : fdr.CFLUpper;
+        newRoute.Add(startSegment);
+
+        // vatSys uses a named waypoint near the position, if there is one.
+        var holdIntersection = Airspace2.FindIntersection(position, distanceTolerance)
+            ?? new Airspace2.Intersection(Conversions.ConvertToStripLatLong(position), position);
+        var holdSegment = new FDP2.FDR.ExtractedRoute.Segment(newRoute)
+        {
+            Type = FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.REROUTE,
+            Intersection = holdIntersection
+        };
+        newRoute.Add(holdSegment);
+
+        FDP2.ModifyRoute(fdr, newRoute, null, rejoinWaypoint);
+        FlightPlanNetwork.SendFlightPlanChange(fdr);
+
+        // Make a position report at the aircraft position. The hold point is then the next waypoint.
+        var routeStartSegment = fdr.ParsedRoute.FirstOrDefault(s => s.Intersection.Name == startSegment.Intersection.Name);
+        if (routeStartSegment is not null)
+            fdr.TaskQueue.QueueTask(() => FDP2.PositionReport(fdr, routeStartSegment, DateTime.UtcNow, true));
+
+        return holdSegment.GetFlightPlanName();
     }
 
     public void Receive(HoldPointAddedCommand message)

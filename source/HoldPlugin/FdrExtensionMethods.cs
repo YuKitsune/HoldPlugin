@@ -4,6 +4,11 @@ namespace HoldPlugin;
 
 public static class FdrExtensionMethods
 {
+    // The name of the waypoint in the flight plan route, and in the delays in the remarks. For a
+    // lat/long point, this is e.g. 3330S15100E, but the strip shows 33 15+.
+    public static string GetFlightPlanName(this FDP2.FDR.ExtractedRoute.Segment segment) =>
+        Conversions.ConvertWaypointNameToFlightPlan(segment);
+
     // In the hold, the arrival time is the hold entry time. Before the aircraft gets to the hold
     // point, the arrival time is the time at the previous segment plus the EET to the hold point.
     // CalculateETOsPatch does not change the segments before the hold point.

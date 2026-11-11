@@ -68,19 +68,18 @@ public class HoldRepository
     }
 
     /// <summary>
-    ///     Remove the hold for the callsign, and remember that the aircraft left its hold point.
+    ///     Remove the hold for the callsign, and remember that the aircraft left the hold point.
+    ///     <paramref name="holdPoint"/> is the name of the hold point in the flight plan route.
     /// </summary>
     /// <returns><c>true</c> if the hold was removed, otherwise <c>false</c>.</returns>
-    public bool TryComplete(string callsign)
+    public bool TryComplete(string callsign, string holdPoint)
     {
         lock (_lock)
         {
-            var hold = _holds.FirstOrDefault(h => h.Callsign == callsign);
-            if (hold is null)
+            if (_holds.RemoveAll(h => h.Callsign == callsign) == 0)
                 return false;
 
-            _holds.Remove(hold);
-            _completedHolds.Add((callsign, hold.HoldPoint));
+            _completedHolds.Add((callsign, holdPoint));
             return true;
         }
     }

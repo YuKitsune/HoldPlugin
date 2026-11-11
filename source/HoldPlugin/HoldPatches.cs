@@ -183,14 +183,14 @@ public static class HoldPatches
                         return false;
                     }
 
-                    return TryCompleteHold(fdr, hold);
+                    return TryCompleteHold(fdr, hold, holdPointIndex);
                 }
 
                 // vatSys adds an APR segment before the route index that it finds.
                 if (FindPositionReportIndex(rt, fdr) <= holdPointIndex)
                     return true;
 
-                return TryCompleteHold(fdr, hold);
+                return TryCompleteHold(fdr, hold, holdPointIndex);
             }
             catch (Exception ex)
             {
@@ -202,12 +202,12 @@ public static class HoldPatches
         // vatSys found the aircraft after the hold point. End a hold with a delay from the remarks
         // when the exit time has passed. vatSys can then make the position report, and the
         // aircraft moves along its route again. Returns true if the hold ended.
-        static bool TryCompleteHold(FDP2.FDR fdr, HoldItem hold)
+        static bool TryCompleteHold(FDP2.FDR fdr, HoldItem hold, int holdPointIndex)
         {
             if (hold.Delay is null || DateTime.UtcNow < hold.HoldExitTime)
                 return false;
 
-            if (!_holds.TryComplete(fdr.Callsign))
+            if (!_holds.TryComplete(fdr.Callsign, fdr.ParsedRoute[holdPointIndex].GetFlightPlanName()))
                 return false;
 
             WeakReferenceMessenger.Default.Send(new HoldCompletedCommand(hold.HoldPoint));
@@ -396,7 +396,7 @@ public static class HoldPatches
                     return;
 
                 var delay = GetCurrentDelay(fdr, segment);
-                WeakReferenceMessenger.Default.Send(new OpenDelayPopupCommand(fdr.Callsign, segment.Intersection.Name, delay));
+                WeakReferenceMessenger.Default.Send(new OpenDelayPopupCommand(fdr.Callsign, segment.GetFlightPlanName(), delay));
             }
             catch (Exception ex)
             {
@@ -408,7 +408,8 @@ public static class HoldPatches
         // point and the hold exit point, the delay is the current hold duration.
         static TimeSpan? GetCurrentDelay(FDP2.FDR fdr, FDP2.FDR.ExtractedRoute.Segment segment)
         {
-            var delayRemark = DelayRemarks.Parse(fdr).FirstOrDefault(d => d.WaypointName == segment.Intersection.Name);
+            var waypointName = segment.GetFlightPlanName();
+            var delayRemark = DelayRemarks.Parse(fdr).FirstOrDefault(d => d.WaypointName == waypointName);
             if (delayRemark is not null)
                 return delayRemark.Delay;
 

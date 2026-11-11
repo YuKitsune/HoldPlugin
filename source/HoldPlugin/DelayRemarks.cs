@@ -1,6 +1,4 @@
-using System.Reflection;
 using System.Text.RegularExpressions;
-using HarmonyLib;
 using vatsys;
 
 namespace HoldPlugin;
@@ -16,12 +14,10 @@ public static class DelayRemarks
 {
     static readonly Regex DelayRegex = new(@"\bDLE/(\w+?)(\d{2})(\d{2})\b");
 
-    static readonly FieldInfo NetworkInstanceField = AccessTools.Field(typeof(Network), "Instance");
-    static readonly MethodInfo SendFlightPlanChangeMethod = AccessTools.Method(typeof(Network), "SendFlightPlanChange");
-
     /// <summary>
     ///     Find all the delays in the remarks, in the sequence of the remarks. This does not match
-    ///     the waypoints to the route.
+    ///     the waypoints to the route. The waypoint names are the names in the flight plan route
+    ///     (see <see cref="FdrExtensionMethods.GetFlightPlanName"/>).
     /// </summary>
     public static DelayRemark[] Parse(FDP2.FDR fdr)
     {
@@ -79,12 +75,10 @@ public static class DelayRemarks
 
     // vatSys has no public method that changes only the remarks. FDP2.ModifyFDR parses the route
     // again, and the route then loses its ATOs. Thus set the remarks, then send the flight plan
-    // change to the network. vatSys sends it only when the controller has permission.
+    // change to the network.
     static void SetRemarks(FDP2.FDR fdr, string remarks)
     {
         fdr.Remarks = remarks;
-
-        var network = NetworkInstanceField.GetValue(null);
-        SendFlightPlanChangeMethod.Invoke(network, [fdr]);
+        FlightPlanNetwork.SendFlightPlanChange(fdr);
     }
 }
