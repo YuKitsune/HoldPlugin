@@ -2,9 +2,9 @@ using System.Configuration;
 using System.Drawing;
 using System.Reflection;
 using System.Windows.Forms;
-using CommunityToolkit.Mvvm.Messaging;
 using HarmonyLib;
 using HoldPlugin.Contracts;
+using MediatR;
 using vatsys;
 using vatSysToolbox;
 
@@ -28,15 +28,17 @@ public static class HoldKeyPatches
     // The patches run on the GUI thread.
     static KeySettings _keySettings = null!;
     static IErrorReporter _errorReporter = null!;
+    static IMediator _mediator = null!;
 
     // True while the user resets the keys to the defaults in the Keyboard Settings window.
     static bool _isResettingKeys;
 
     // Call this before HoldPatches.Apply, which applies all the patches in the assembly.
-    public static void Initialize(KeySettings keySettings, IErrorReporter errorReporter)
+    public static void Initialize(KeySettings keySettings, IErrorReporter errorReporter, IMediator mediator)
     {
         _keySettings = keySettings;
         _errorReporter = errorReporter;
+        _mediator = mediator;
     }
 
     /// <summary>
@@ -69,7 +71,7 @@ public static class HoldKeyPatches
                 var range = (int)GetRangeMethod.Invoke(__instance, null);
                 var distanceTolerance = range / (double)__instance.ClientSize.Width * 6.0;
 
-                WeakReferenceMessenger.Default.Send(new HoldKeyPressedCommand(fdr.Callsign, cursorPosition, distanceTolerance));
+                _ = _mediator.Send(new HoldKeyPressedCommand(fdr.Callsign, cursorPosition, distanceTolerance));
                 return false;
             }
             catch (Exception ex)

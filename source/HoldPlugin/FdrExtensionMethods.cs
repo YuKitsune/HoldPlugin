@@ -14,6 +14,12 @@ public static class FdrExtensionMethods
             .Skip(Math.Max(fdr.ParsedRoute.OverflownIndex + 1, 0))
             .FirstOrDefault(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT);
 
+    public static FDP2.FDR.ExtractedRoute.Segment[] GetWaypointsAhead(this FDP2.FDR fdr) =>
+        fdr.ParsedRoute.ToList()
+            .Skip(Math.Max(fdr.ParsedRoute.OverflownIndex + 1, 0))
+            .Where(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT)
+            .ToArray();
+
     // In the hold, the arrival time is the hold entry time. Before the aircraft gets to the hold
     // point, the arrival time is the time at the previous segment plus the EET to the hold point.
     // CalculateETOsPatch does not change the segments before the hold point.

@@ -1,11 +1,11 @@
 ﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using CommunityToolkit.Mvvm.Messaging;
 using HoldPlugin.Contracts;
+using MediatR;
 
 namespace HoldPlugin.ViewModels;
 
-public partial class DelayPopupViewModel(string callsign, string waypointName, TimeSpan? delay) : ObservableObject
+public partial class DelayPopupViewModel(string callsign, string waypointName, TimeSpan? delay, IMediator mediator) : ObservableObject
 {
     [ObservableProperty] string _waypointName = waypointName;
     [ObservableProperty] string _delayDuration = FormatDuration(delay);
@@ -21,7 +21,7 @@ public partial class DelayPopupViewModel(string callsign, string waypointName, T
         if (newDelay is null || newDelay < TimeSpan.Zero)
             return;
 
-        WeakReferenceMessenger.Default.Send(new SetHoldDelayCommand(callsign, WaypointName, newDelay.Value));
+        _ = mediator.Send(new SetHoldDelayCommand(callsign, WaypointName, newDelay.Value));
     }
 
     // The format is HHMM.

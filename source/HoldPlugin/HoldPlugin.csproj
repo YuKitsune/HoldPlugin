@@ -27,7 +27,8 @@
         <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.1" />
         <PackageReference Include="Microsoft.Xaml.Behaviors.Wpf" Version="1.1.135" />
         <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
-        <PackageReference Include="vatSysToolbox" Version="0.1.10" />
+        <PackageReference Include="vatSysToolbox" Version="0.1.11" />
+        <PackageReference Include="vatSysToolbox.MediatR" Version="0.1.11" />
     </ItemGroup>
 
     <ItemGroup>

@@ -2,6 +2,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Messaging;
 using HoldPlugin.Contracts;
+using MediatR;
 using vatSysToolbox.Windows;
 
 namespace HoldPlugin.ViewModels;
@@ -12,6 +13,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
     readonly HoldSlotRepository _holdSlotRepository;
     readonly IWindowHandle _windowHandle;
     readonly IGuiInvoker _guiInvoker;
+    readonly IMediator _mediator;
     
     [ObservableProperty] string _holdPointName = "";
     [ObservableProperty] ObservableCollection<HoldItemViewModel> _items = [];
@@ -24,6 +26,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
         _holdSlotRepository = null!;
         _guiInvoker = null!;
         _windowHandle = null!;
+        _mediator = null!;
         
         Items =
         [
@@ -35,7 +38,8 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
                 null,
                 DateTime.Now.AddMinutes(30),
                 "H/RIV",
-                HoldItemState.Jurisdiction)
+                HoldItemState.Jurisdiction,
+                _mediator)
             {
                 IsDesignated = true
             },
@@ -47,17 +51,19 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
                 DateTime.Now.AddMinutes(20),
                 DateTime.Now.AddMinutes(30),
                 "H/TAR",
-                HoldItemState.Handover)
+                HoldItemState.Handover,
+                _mediator)
         ];
     }
 #endif
 
-    public HoldListViewModel(string pointName, HoldItem[] items, HoldRepository holdRepository, HoldSlotRepository holdSlotRepository, IWindowHandle windowHandle, IGuiInvoker guiInvoker)
+    public HoldListViewModel(string pointName, HoldItem[] items, HoldRepository holdRepository, HoldSlotRepository holdSlotRepository, IWindowHandle windowHandle, IGuiInvoker guiInvoker, IMediator mediator)
     {
         _holdRepository = holdRepository;
         _holdSlotRepository = holdSlotRepository;
         _windowHandle = windowHandle;
         _guiInvoker = guiInvoker;
+        _mediator = mediator;
 
         HoldPointName = pointName;
         UpdateItems(items);
@@ -104,7 +110,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
             }
             else
             {
-                Items.Add(new HoldItemViewModel(relevantHoldItem));
+                Items.Add(new HoldItemViewModel(relevantHoldItem, _mediator));
             }
 
             callsigns.Remove(relevantHoldItem.Callsign);

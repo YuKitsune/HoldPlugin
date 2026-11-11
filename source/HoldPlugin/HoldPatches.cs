@@ -1,9 +1,9 @@
 using System.Collections;
 using System.Reflection;
 using System.Reflection.Emit;
-using CommunityToolkit.Mvvm.Messaging;
 using HarmonyLib;
 using HoldPlugin.Contracts;
+using MediatR;
 using vatsys;
 using vatSysToolbox;
 
@@ -18,11 +18,13 @@ public static class HoldPatches
     // The patches run on vatSys threads. The hold repository is thread-safe.
     static HoldRepository _holds = null!;
     static IErrorReporter _errorReporter = null!;
+    static IMediator _mediator = null!;
 
-    public static void Apply(string harmonyId, HoldRepository holdRepository, IErrorReporter errorReporter)
+    public static void Apply(string harmonyId, HoldRepository holdRepository, IErrorReporter errorReporter, IMediator mediator)
     {
         _holds = holdRepository;
         _errorReporter = errorReporter;
+        _mediator = mediator;
 
         var harmony = new Harmony(harmonyId);
         harmony.PatchAll(typeof(HoldPatches).Assembly);
@@ -628,7 +630,7 @@ public static class HoldPatches
                 if (delay is null)
                     return;
 
-                WeakReferenceMessenger.Default.Send(new OpenDelayPopupCommand(fdr.Callsign, segment.GetFlightPlanName(), delay));
+                _ = _mediator.Send(new OpenDelayPopupCommand(fdr.Callsign, segment.GetFlightPlanName(), delay));
             }
             catch (Exception ex)
             {

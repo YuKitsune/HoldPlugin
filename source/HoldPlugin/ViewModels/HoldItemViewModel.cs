@@ -1,8 +1,8 @@
 ﻿using System.Windows.Forms;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using CommunityToolkit.Mvvm.Messaging;
 using HoldPlugin.Contracts;
+using MediatR;
 
 namespace HoldPlugin.ViewModels;
 
@@ -15,6 +15,8 @@ public enum HoldItemState
 
 public partial class HoldItemViewModel : ObservableObject
 {
+    readonly IMediator _mediator;
+
     [ObservableProperty] bool _isDesignated = false;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(DisplayAircraftId))] string _aircraftId = "ACIDDDDD";
     [ObservableProperty, NotifyPropertyChangedFor(nameof(DisplayLevel))] int _level = 0;
@@ -35,8 +37,10 @@ public partial class HoldItemViewModel : ObservableObject
         DateTime? holdEntryTime,
         DateTime holdExitTime,
         string globalOps,
-        HoldItemState state)
+        HoldItemState state,
+        IMediator mediator)
     {
+        _mediator = mediator;
         AircraftId = aircraftId;
         Level = level;
         ClearedFlightLevel = clearedFlightLevel;
@@ -47,8 +51,9 @@ public partial class HoldItemViewModel : ObservableObject
         State = state;
     }
 
-    public HoldItemViewModel(HoldItem item)
+    public HoldItemViewModel(HoldItem item, IMediator mediator)
     {
+        _mediator = mediator;
         AircraftId = item.Callsign;
         IsDesignated = item.IsDesignated;
         Level = item.Level;
@@ -85,25 +90,25 @@ public partial class HoldItemViewModel : ObservableObject
     [RelayCommand]
     void DesignateAircraft()
     {
-        WeakReferenceMessenger.Default.Send(new DesignateAircraftCommand(AircraftId));
+        _ = _mediator.Send(new DesignateAircraftCommand(AircraftId));
     }
 
     [RelayCommand]
     void CancelHold()
     {
-        WeakReferenceMessenger.Default.Send(new CancelHoldCommand(AircraftId));
+        _ = _mediator.Send(new CancelHoldCommand(AircraftId));
     }
 
     [RelayCommand]
     void OpenClearedLevelMenu()
     {
-        WeakReferenceMessenger.Default.Send(new OpenClearedLevelMenuCommand(AircraftId));
+        _ = _mediator.Send(new OpenClearedLevelMenuCommand(AircraftId));
     }
 
     [RelayCommand]
     void OpenHoldExitMenu()
     {
-        WeakReferenceMessenger.Default.Send(new OpenHoldExitMenuCommand(AircraftId));
+        _ = _mediator.Send(new OpenHoldExitMenuCommand(AircraftId));
     }
 
     [RelayCommand]
@@ -118,7 +123,7 @@ public partial class HoldItemViewModel : ObservableObject
     {
         if (IsEditingGlobalOps)
         {
-            WeakReferenceMessenger.Default.Send(new ChangeGlobalOpsCommand(AircraftId, GlobalOpsEditValue));
+            _ = _mediator.Send(new ChangeGlobalOpsCommand(AircraftId, GlobalOpsEditValue));
             IsEditingGlobalOps = false;
         }
     }

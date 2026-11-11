@@ -2,6 +2,7 @@
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
 using HoldPlugin.Contracts;
+using MediatR;
 using vatSysToolbox;
 using vatSysToolbox.Windows;
 
@@ -12,24 +13,26 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
     readonly HoldSlotRepository _holdSlotRepository;
     readonly IGuiInvoker _guiInvoker;
     readonly IErrorReporter _errorReporter;
+    readonly IMediator _mediator;
 
     [ObservableProperty] HoldButtonViewModel _button1;
     [ObservableProperty] HoldButtonViewModel _button2;
     [ObservableProperty] HoldButtonViewModel _button3;
     [ObservableProperty] HoldButtonViewModel _button4;
 
-    public HoldSetupViewModel(HoldSlotRepository holdSlotRepository, IGuiInvoker guiInvoker, IErrorReporter errorReporter)
+    public HoldSetupViewModel(HoldSlotRepository holdSlotRepository, IGuiInvoker guiInvoker, IErrorReporter errorReporter, IMediator mediator)
     {
         _holdSlotRepository = holdSlotRepository;
         _guiInvoker = guiInvoker;
         _errorReporter = errorReporter;
+        _mediator = mediator;
 
         var holds = _holdSlotRepository.GetSlots();
 
-        Button1 = new HoldButtonViewModel(0, holds[0].GetHoldPointName() ?? string.Empty, this, _errorReporter);
-        Button2 = new HoldButtonViewModel(1, holds[1].GetHoldPointName() ?? string.Empty, this, _errorReporter);
-        Button3 = new HoldButtonViewModel(2, holds[2].GetHoldPointName() ?? string.Empty, this, _errorReporter);
-        Button4 = new HoldButtonViewModel(3, holds[3].GetHoldPointName() ?? string.Empty, this, _errorReporter);
+        Button1 = new HoldButtonViewModel(0, holds[0].GetHoldPointName() ?? string.Empty, this, _errorReporter, _mediator);
+        Button2 = new HoldButtonViewModel(1, holds[1].GetHoldPointName() ?? string.Empty, this, _errorReporter, _mediator);
+        Button3 = new HoldButtonViewModel(2, holds[2].GetHoldPointName() ?? string.Empty, this, _errorReporter, _mediator);
+        Button4 = new HoldButtonViewModel(3, holds[3].GetHoldPointName() ?? string.Empty, this, _errorReporter, _mediator);
 
         WeakReferenceMessenger.Default.Register(this);
     }
@@ -70,16 +73,18 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
         readonly int _index;
         readonly HoldSetupViewModel _parent;
         readonly IErrorReporter _errorReporter;
+        readonly IMediator _mediator;
 
         [ObservableProperty] string? _holdPointName;
         [ObservableProperty] bool _isEditing;
         [ObservableProperty] string _editValue = "";
 
-        public HoldButtonViewModel(int index, string pointName, HoldSetupViewModel parent, IErrorReporter errorReporter)
+        public HoldButtonViewModel(int index, string pointName, HoldSetupViewModel parent, IErrorReporter errorReporter, IMediator mediator)
         {
             _index = index;
             _parent = parent;
             _errorReporter = errorReporter;
+            _mediator = mediator;
             
             HoldPointName = pointName;
         }
@@ -119,7 +124,7 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
             // If there was a previous hold point, delete it
             if (!string.IsNullOrWhiteSpace(HoldPointName))
             {
-                WeakReferenceMessenger.Default.Send(new HoldPointRemovedCommand(HoldPointName));
+                _ = _mediator.Send(new HoldPointRemovedCommand(HoldPointName));
             }
 
             // Update the hold point name
@@ -130,7 +135,7 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
             // If the new name is not empty, create the hold list
             if (!string.IsNullOrWhiteSpace(HoldPointName))
             {
-                WeakReferenceMessenger.Default.Send(new HoldPointAddedCommand(_index, HoldPointName));
+                _ = _mediator.Send(new HoldPointAddedCommand(_index, HoldPointName));
             }
 
             IsEditing = false;
