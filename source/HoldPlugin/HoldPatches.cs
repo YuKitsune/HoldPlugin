@@ -194,6 +194,107 @@ public static class HoldPatches
     }
 
     /// <summary>
+    ///     In a hold, show the hold point two times on the strip. The first time shows the arrival
+    ///     time (ETO or ATO). The second time shows the hold exit time.
+    /// </summary>
+    [HarmonyPatch]
+    static class PaintStripItemPatch
+    {
+        static MethodBase TargetMethod() => AccessTools.Method("vatsys.StripPanelDX:PaintStripItem");
+
+        // The strip route contains only the waypoints, starting at the last overflown waypoint.
+        static void Prefix(FDP2.FDR fdr, ref IList<FDP2.FDR.ExtractedRoute.Segment> route)
+        {
+            try
+            {
+                var hold = _holds.Find(fdr.Callsign);
+                if (hold is null)
+                    return;
+
+                var holdSegment = fdr.FindHoldWaypoint(hold.HoldPoint);
+                if (holdSegment is null)
+                    return;
+
+                var holdPointIndex = route.IndexOf(holdSegment);
+                if (holdPointIndex == -1)
+                    return;
+
+                if (!TryGetArrivalTime(fdr, hold, holdSegment, out var arrivalEto, out var arrivalAto))
+                    return;
+
+                var arrivalSegment = CreateStripSegment(fdr, holdSegment, arrivalEto, arrivalAto);
+
+                // The hold point has an ATO when the hold started after the aircraft crossed the
+                // hold point. The strip shows the ATO before the ETO, thus the exit time must go on
+                // a copy of the hold point.
+                var exitSegment = holdSegment.ATO == DateTime.MaxValue
+                    ? holdSegment
+                    : CreateStripSegment(fdr, holdSegment, hold.HoldExitTime, DateTime.MaxValue);
+
+                var stripRoute = route.ToList();
+                stripRoute[holdPointIndex] = exitSegment;
+                stripRoute.Insert(holdPointIndex, arrivalSegment);
+                route = stripRoute;
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+            }
+        }
+
+        // Before the aircraft gets to the hold point, the arrival ETO is the time at the previous
+        // segment plus the EET to the hold point. CalculateETOsPatch does not change the segments
+        // before the hold point.
+        static bool TryGetArrivalTime(
+            FDP2.FDR fdr,
+            HoldItem hold,
+            FDP2.FDR.ExtractedRoute.Segment holdSegment,
+            out DateTime eto,
+            out DateTime ato)
+        {
+            eto = DateTime.MaxValue;
+            ato = DateTime.MaxValue;
+
+            if (hold.HoldEntryTime is not null)
+            {
+                ato = hold.HoldEntryTime.Value;
+                return true;
+            }
+
+            var holdPointIndex = fdr.ParsedRoute.IndexOf(holdSegment);
+            if (holdPointIndex < 1)
+                return false;
+
+            var previousSegment = fdr.ParsedRoute[holdPointIndex - 1];
+            var previousTime = previousSegment.ATO != DateTime.MaxValue ? previousSegment.ATO : previousSegment.ETO;
+            if (previousTime == DateTime.MaxValue)
+                return false;
+
+            eto = previousTime + holdSegment.EET;
+            return true;
+        }
+
+        // Make a segment for the strip only. It is not in the route of the FDR.
+        static FDP2.FDR.ExtractedRoute.Segment CreateStripSegment(
+            FDP2.FDR fdr,
+            FDP2.FDR.ExtractedRoute.Segment holdSegment,
+            DateTime eto,
+            DateTime ato)
+        {
+            return new FDP2.FDR.ExtractedRoute.Segment(fdr.ParsedRoute)
+            {
+                Type = FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT,
+                Intersection = holdSegment.Intersection,
+                EET = holdSegment.EET,
+                Distance = holdSegment.Distance,
+                PCLNoEvent = holdSegment.PCL,
+                ETONoEvent = eto,
+                ATONoEvent = ato
+            };
+        }
+    }
+
+    /// <summary>
     ///     Do not show a RAM alert for an aircraft in a hold.
     /// </summary>
     [HarmonyPatch(typeof(RDP), "CheckForRAM", typeof(RDP.RadarTrack))]
