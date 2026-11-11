@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Reflection;
+using System.Reflection.Emit;
 using CommunityToolkit.Mvvm.Messaging;
 using HarmonyLib;
 using HoldPlugin.Contracts;
@@ -51,6 +52,25 @@ public static class HoldPatches
             return -1;
 
         return fdr.ParsedRoute.IndexOf(holdSegment);
+    }
+
+    // Make a copy of a segment for the display only. It is not in the route of the FDR.
+    static FDP2.FDR.ExtractedRoute.Segment CreateSegmentCopy(
+        FDP2.FDR fdr,
+        FDP2.FDR.ExtractedRoute.Segment segment,
+        DateTime eto,
+        DateTime ato)
+    {
+        return new FDP2.FDR.ExtractedRoute.Segment(fdr.ParsedRoute)
+        {
+            Type = FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT,
+            Intersection = segment.Intersection,
+            EET = segment.EET,
+            Distance = segment.Distance,
+            PCLNoEvent = segment.PCL,
+            ETONoEvent = eto,
+            ATONoEvent = ato
+        };
     }
 
     /// <summary>
@@ -338,6 +358,91 @@ public static class HoldPatches
     }
 
     /// <summary>
+    ///     Show the hold and the delays (DLE) in the SRP. vatSys draws the time SRP from the ETOs,
+    ///     and moves the aircraft at a constant speed from one waypoint to the next. Thus without
+    ///     this patch, the SRP goes past the hold point or the delay waypoint before the exit
+    ///     time. Give vatSys a copy of the route where the waypoint is there two times: one at
+    ///     the arrival time, and one at the exit time. The SRP then stays at the waypoint until
+    ///     the exit time. The distance SRP does not use the times, and a copy at the same position
+    ///     does not change the distance.
+    /// </summary>
+    [HarmonyPatch]
+    static class SrpPatch
+    {
+        static readonly MethodInfo ToListMethod = AccessTools.Method(typeof(FDP2.FDR.ExtractedRoute), nameof(FDP2.FDR.ExtractedRoute.ToList));
+        static readonly MethodInfo GetSrpRouteMethod = AccessTools.Method(typeof(SrpPatch), nameof(GetSrpRoute));
+
+        static MethodBase TargetMethod() => AccessTools.Method("vatsys.ASDControlDX:PaintASDTrack");
+
+        // Replace fdr.ParsedRoute.ToList() with GetSrpRoute(fdr.ParsedRoute).
+        static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            foreach (var instruction in instructions)
+            {
+                if (instruction.Calls(ToListMethod))
+                {
+                    instruction.opcode = OpCodes.Call;
+                    instruction.operand = GetSrpRouteMethod;
+                }
+
+                yield return instruction;
+            }
+        }
+
+        static List<FDP2.FDR.ExtractedRoute.Segment> GetSrpRoute(FDP2.FDR.ExtractedRoute parsedRoute)
+        {
+            var route = parsedRoute.ToList();
+            try
+            {
+                var fdr = parsedRoute.Parent;
+                var overflownIndex = parsedRoute.OverflownIndex;
+
+                // vatSys starts the SRP at the overflown index. Do not change the segments before
+                // it, because an insert there moves the segment at the overflown index.
+                var exitTimes = fdr.GetActiveDelays()
+                    .Where(d => d.Key >= overflownIndex && GetArrivalTime(route[d.Key]) != DateTime.MaxValue)
+                    .ToDictionary(d => d.Key, d => GetArrivalTime(route[d.Key]) + d.Value);
+
+                // At the hold point, the hold wins over the delay.
+                if (TryGetHoldPointIndex(fdr, out var hold, out var holdPointIndex))
+                    exitTimes[holdPointIndex] = hold.HoldExitTime;
+
+                // Start at the end of the route, so that an insert does not move the segments
+                // that are not done yet.
+                foreach (var exitTime in exitTimes.OrderByDescending(e => e.Key))
+                {
+                    var index = exitTime.Key;
+                    var segment = route[index];
+                    var arrivalTime = GetArrivalTime(segment);
+                    if (arrivalTime == DateTime.MaxValue)
+                        continue;
+
+                    var exitSegment = CreateSegmentCopy(fdr, segment, exitTime.Value, DateTime.MaxValue);
+
+                    // After the exit time, the SRP must not go back to the waypoint.
+                    if (index == overflownIndex && exitTime.Value <= DateTime.UtcNow)
+                    {
+                        route[index] = exitSegment;
+                        continue;
+                    }
+
+                    route[index] = CreateSegmentCopy(fdr, segment, arrivalTime, DateTime.MaxValue);
+                    route.Insert(index + 1, exitSegment);
+                }
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+            }
+
+            return route;
+        }
+
+        static DateTime GetArrivalTime(FDP2.FDR.ExtractedRoute.Segment segment) =>
+            segment.ATO != DateTime.MaxValue ? segment.ATO : segment.ETO;
+    }
+
+    /// <summary>
     ///     Show the waypoint of a delay (DLE) or a hold two times on the strip. The first time
     ///     shows the arrival time (ETO or ATO). The second time shows the departure time: the
     ///     arrival time plus the delay, or the hold exit time. When the aircraft is in the hold,
@@ -394,10 +499,10 @@ public static class HoldPatches
                 if (arrivalTime == DateTime.MaxValue)
                     continue;
 
-                var arrivalSegment = CreateStripSegment(fdr, segment, segment.ETO, segment.ATO);
+                var arrivalSegment = CreateSegmentCopy(fdr, segment, segment.ETO, segment.ATO);
                 arrivalSegment.Tag = ArrivalSegmentTag;
 
-                stripRoute[stripIndex] = CreateStripSegment(fdr, segment, arrivalTime + activeDelay.Value, DateTime.MaxValue);
+                stripRoute[stripIndex] = CreateSegmentCopy(fdr, segment, arrivalTime + activeDelay.Value, DateTime.MaxValue);
                 stripRoute.Insert(stripIndex, arrivalSegment);
                 isChanged = true;
             }
@@ -421,13 +526,13 @@ public static class HoldPatches
 
             // After the aircraft gets to the hold point, the arrival time is an ATO.
             var arrivalSegment = hold.HoldEntryTime is null
-                ? CreateStripSegment(fdr, holdSegment, arrivalTime, DateTime.MaxValue)
-                : CreateStripSegment(fdr, holdSegment, DateTime.MaxValue, arrivalTime);
+                ? CreateSegmentCopy(fdr, holdSegment, arrivalTime, DateTime.MaxValue)
+                : CreateSegmentCopy(fdr, holdSegment, DateTime.MaxValue, arrivalTime);
             arrivalSegment.Tag = ArrivalSegmentTag;
 
             // The ETO of the hold point is the arrival time, thus the exit time must go on a copy
             // of the hold point.
-            var exitSegment = CreateStripSegment(fdr, holdSegment, hold.HoldExitTime, DateTime.MaxValue);
+            var exitSegment = CreateSegmentCopy(fdr, holdSegment, hold.HoldExitTime, DateTime.MaxValue);
 
             stripRoute[holdPointIndex] = exitSegment;
             stripRoute.Insert(holdPointIndex, arrivalSegment);
@@ -438,25 +543,6 @@ public static class HoldPatches
                 stripRoute.RemoveRange(0, holdPointIndex);
 
             return true;
-        }
-
-        // Make a segment for the strip only. It is not in the route of the FDR.
-        static FDP2.FDR.ExtractedRoute.Segment CreateStripSegment(
-            FDP2.FDR fdr,
-            FDP2.FDR.ExtractedRoute.Segment holdSegment,
-            DateTime eto,
-            DateTime ato)
-        {
-            return new FDP2.FDR.ExtractedRoute.Segment(fdr.ParsedRoute)
-            {
-                Type = FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT,
-                Intersection = holdSegment.Intersection,
-                EET = holdSegment.EET,
-                Distance = holdSegment.Distance,
-                PCLNoEvent = holdSegment.PCL,
-                ETONoEvent = eto,
-                ATONoEvent = ato
-            };
         }
     }
 
