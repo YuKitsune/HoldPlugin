@@ -18,7 +18,11 @@ public static class HoldKeyPatches
     const string HoldKeyButtonName = "holdPluginHoldKeyToggleButton";
 
     static readonly Type KeyboardSettingsWindowType = AccessTools.TypeByName("vatsys.KeyboardSettingsWindow");
-    static readonly MethodInfo SetTextMethod = AccessTools.Method(KeyboardSettingsWindowType, "SetText");
+    // SetText has two overloads: (ToggleButton, Keys) and (ToggleButton, InputMap).
+    static readonly MethodInfo SetTextMethod = AccessTools.Method(
+        KeyboardSettingsWindowType,
+        "SetText",
+        [AccessTools.TypeByName("vatsys.ToggleButton"), typeof(Keys)]);
 
     // The patches run on the GUI thread.
     static KeySettings _keySettings = null!;
