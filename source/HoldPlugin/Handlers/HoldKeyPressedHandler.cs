@@ -44,7 +44,7 @@ public class HoldKeyPressedHandler(
                 if (holdPointName is null)
                     return;
 
-                holdService.SetDelay(fdr, DelayType.Hold, holdPointName, HoldService.DefaultHoldDuration);
+                holdService.SetDefaultHold(fdr, holdPointName);
             }
             catch (Exception ex)
             {

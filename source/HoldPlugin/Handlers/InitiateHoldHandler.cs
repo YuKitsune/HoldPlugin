@@ -31,7 +31,7 @@ public class InitiateHoldHandler(
                 if (hold is not null && fdr.FindHoldWaypoint(hold.HoldPoint)?.GetFlightPlanName() == request.WaypointName)
                     return;
 
-                holdService.SetDelay(fdr, DelayType.Hold, request.WaypointName, HoldService.DefaultHoldDuration);
+                holdService.SetDefaultHold(fdr, request.WaypointName);
             }
             catch (Exception ex)
             {

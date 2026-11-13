@@ -25,7 +25,7 @@ public class SetHoldDelayHandler(HoldService holdService, WorkQueue workQueue, I
                 }
                 else
                 {
-                    holdService.SetDelay(fdr, DelayType.Delay, request.WaypointName, request.Delay);
+                    holdService.SetDelay(fdr, request.WaypointName, request.Delay);
                 }
             }
             catch (Exception ex)

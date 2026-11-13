@@ -80,7 +80,7 @@ public static class HoldPatches
     ///     the ETO of its waypoint, thus vatSys marks the waypoint as overflown as usual. The
     ///     ETOs after the waypoint start at the ETO plus the delay. In a hold, the ETO of the hold
     ///     point is the arrival time, and the ETOs after the hold point start at the hold exit
-    ///     time. The hold exit time is the arrival time plus the delay.
+    ///     time. If the exit time is before the arrival time, they start at the arrival time.
     /// </summary>
     [HarmonyPatch(typeof(FDP2.FDR.ExtractedRoute), nameof(FDP2.FDR.ExtractedRoute.CalculateETOs))]
     static class CalculateETOsPatch
@@ -123,7 +123,8 @@ public static class HoldPatches
                         if (fdr.TryGetHoldArrivalTime(segment, hold.HoldEntryTime, out var holdArrivalTime))
                         {
                             segment.ETONoEvent = holdArrivalTime;
-                            departureTime = UpdateHoldExitTime(fdr, hold, holdArrivalTime);
+                            if (holdArrivalTime > departureTime)
+                                departureTime = holdArrivalTime;
                         }
 
                         continue;
@@ -142,15 +143,6 @@ public static class HoldPatches
             {
                 _errorReporter.ReportError(ex);
             }
-        }
-
-        static DateTime UpdateHoldExitTime(FDP2.FDR fdr, HoldItem hold, DateTime arrivalTime)
-        {
-            var holdExitTime = arrivalTime + hold.Delay;
-            if (holdExitTime != hold.HoldExitTime)
-                _holds.Update(fdr.Callsign, h => h with { HoldExitTime = holdExitTime });
-
-            return holdExitTime;
         }
     }
 
@@ -224,8 +216,7 @@ public static class HoldPatches
                     {
                         _holds.Update(fdr.Callsign, h => h with { HoldEntryTime = h.HoldEntryTime ?? DateTime.UtcNow });
 
-                        // Calculate the ETOs again. With a delay, the hold exit time is now the
-                        // hold entry time plus the delay.
+                        // Calculate the ETOs again from the hold entry time.
                         FDP2.Process(fdr);
                     }
 
@@ -642,8 +633,8 @@ public static class HoldPatches
         static TimeSpan? GetCurrentDelay(FDP2.FDR fdr, FDP2.FDR.ExtractedRoute.Segment segment)
         {
             var waypointName = segment.GetFlightPlanName();
-            return DelayRemarks.Parse(fdr)
-                .FirstOrDefault(d => d.Type == DelayType.Delay && d.WaypointName == waypointName)
+            return DelayRemarks.ParseDelays(fdr)
+                .FirstOrDefault(d => d.WaypointName == waypointName)
                 ?.Delay;
         }
 

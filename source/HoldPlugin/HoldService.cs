@@ -19,13 +19,16 @@ public class HoldService(
     IMediator mediator)
 {
     // The hold duration that the hold key and the Hold item of the waypoint menu give.
-    public static readonly TimeSpan DefaultHoldDuration = TimeSpan.FromMinutes(10);
+    static readonly TimeSpan DefaultHoldDuration = TimeSpan.FromMinutes(10);
 
     // vatSys does not calculate an estimate from radar below this ground speed (knots).
     const double MinimumGroundSpeed = 10;
 
     // A hold that the FDR has in the remarks. HoldPoint is the name of the intersection.
-    record HoldSource(string HoldPoint, TimeSpan Delay);
+    record HoldSource(FDP2.FDR.ExtractedRoute.Segment HoldSegment, DateTime ExitTime)
+    {
+        public string HoldPoint => HoldSegment.Intersection.Name;
+    }
 
     /// <summary>
     ///     Tell the hold lists to show the holds again, and open the hold lists that have holds.
@@ -43,9 +46,7 @@ public class HoldService(
     {
         var existingHold = holdRepository.Find(fdr.Callsign);
 
-        var delayRemarks = DelayRemarks.Parse(fdr);
-
-        if (!TryFindHold(fdr, delayRemarks, out var source))
+        if (!TryFindHold(fdr, out var source))
         {
             if (existingHold is not null)
                 RemoveHold(fdr, existingHold);
@@ -69,36 +70,41 @@ public class HoldService(
     }
 
     /// <summary>
-    ///     Find the hold (HLD) in the remarks on the route ahead of the aircraft. The remarks have
-    ///     only one hold. In a hold, SetOverflownIndexPatch keeps the hold point ahead of the
-    ///     aircraft.
+    ///     Find the hold (HLD) in the remarks on the route. The remarks have only one hold. Search
+    ///     the route ahead of the aircraft first, then the route behind the aircraft. In a hold,
+    ///     SetOverflownIndexPatch keeps the hold point ahead of the aircraft.
     /// </summary>
-    static bool TryFindHold(FDP2.FDR fdr, DelayRemark[] delayRemarks, out HoldSource source)
+    static bool TryFindHold(FDP2.FDR fdr, out HoldSource source)
     {
         source = null!;
 
-        var holdRemark = delayRemarks.FirstOrDefault(d => d.Type == DelayType.Hold);
+        var holdRemark = DelayRemarks.ParseHold(fdr);
         if (holdRemark is null)
             return false;
 
-        var holdSegment = fdr.GetWaypointsAhead().FirstOrDefault(s => s.GetFlightPlanName() == holdRemark.WaypointName);
+        var holdSegment = fdr.FindWaypoint(holdRemark.WaypointName);
         if (holdSegment is null)
             return false;
 
-        source = new HoldSource(holdSegment.Intersection.Name, holdRemark.Delay);
+        source = new HoldSource(holdSegment, holdRemark.ExitTime);
         return true;
     }
 
+    /// <summary>
+    ///     Start the hold. If the aircraft passed the hold point, the aircraft enters the hold
+    ///     now. Then move the route back to the hold point. The ETO of the hold point is then the
+    ///     entry time, thus vatSys moves a flight plan track back to the hold point.
+    /// </summary>
     void InitiateHold(FDP2.FDR fdr, HoldSource source)
     {
-        var holdSegment = fdr.FindHoldWaypoint(source.HoldPoint);
-        if (holdSegment is null)
-            return;
+        var holdSegment = source.HoldSegment;
 
-        // vatSys sets the ETO to DateTime.MaxValue when it has no estimate. CalculateETOsPatch
-        // calculates the exit time again from the arrival time.
-        var holdPointEto = holdSegment.ETO == DateTime.MaxValue ? DateTime.UtcNow : holdSegment.ETO;
-        var holdExitTime = holdPointEto + source.Delay;
+        DateTime? holdEntryTime = null;
+        if (!fdr.GetWaypointsAhead().Contains(holdSegment))
+        {
+            holdEntryTime = DateTime.UtcNow;
+            RewindRoute(fdr, holdSegment);
+        }
 
         var selectedCallsign = MMI.SelectedTrack?.GetFDR()?.Callsign;
         var isDesignated = fdr.Callsign == selectedCallsign;
@@ -113,15 +119,14 @@ public class HoldService(
         var holdItem = new HoldItem(
             fdr.Callsign,
             holdSegment.Intersection.Name,
-            GetHoldEntryTime(holdSegment),
-            holdExitTime,
+            holdEntryTime,
+            source.ExitTime,
             isDesignated,
             level,
             clearedFlightLevel,
             fdr.RVSM,
             fdr.GlobalOpData,
-            state,
-            source.Delay);
+            state);
 
         holdRepository.Add(holdItem);
 
@@ -141,13 +146,8 @@ public class HoldService(
 
         var state = GetHoldItemState(fdr);
 
-        // In a hold, vatSys does not set the ATO of the hold point, and HoldPatches records the entry time.
-        // The hold point has an ATO only when the hold started after the aircraft crossed the hold point.
-        var holdSegment = fdr.FindHoldWaypoint(hold.HoldPoint);
-        var entryTime = holdSegment is not null ? GetHoldEntryTime(holdSegment) : null;
-
-        // CalculateETOsPatch calculates the exit time from the delay.
-        var delayChanged = source.Delay != hold.Delay;
+        // CalculateETOsPatch calculates the ETOs after the hold point from the exit time.
+        var exitTimeChanged = source.ExitTime != hold.HoldExitTime;
 
         holdRepository.Update(hold.Callsign, h => h with
         {
@@ -155,11 +155,10 @@ public class HoldService(
             RvsmApproved = fdr.RVSM,
             GlobalOps = fdr.GlobalOpData,
             State = state,
-            HoldEntryTime = entryTime ?? h.HoldEntryTime,
-            Delay = source.Delay
+            HoldExitTime = source.ExitTime
         });
 
-        if (delayChanged)
+        if (exitTimeChanged)
         {
             UpdateEstimates(fdr);
         }
@@ -207,12 +206,12 @@ public class HoldService(
         if (fdr is not null)
         {
             var holdPointName = fdr.FindHoldWaypoint(hold.HoldPoint)?.GetFlightPlanName() ?? hold.HoldPoint;
-            if (DelayRemarks.HasDelay(fdr, DelayType.Hold, holdPointName))
+            if (DelayRemarks.HasHold(fdr, holdPointName))
             {
                 if (!fdr.HavePermission)
                     return;
 
-                DelayRemarks.Remove(fdr, DelayType.Hold, holdPointName);
+                DelayRemarks.RemoveHold(fdr, holdPointName);
             }
         }
 
@@ -220,17 +219,50 @@ public class HoldService(
     }
 
     /// <summary>
-    ///     Set the delay or hold at the waypoint in the remarks, then initiate or update the hold.
-    ///     FDRPropertyChangedHandler calculates the ETOs again when the remarks change.
+    ///     Set a hold at the waypoint with the default length. The exit time is the arrival time
+    ///     at the waypoint plus the default length. If the aircraft passed the waypoint, the
+    ///     arrival time is now. <paramref name="waypointName"/> is the name in the flight plan
+    ///     route.
+    /// </summary>
+    public void SetDefaultHold(FDP2.FDR fdr, string waypointName)
+    {
+        var holdSegment = fdr.FindWaypoint(waypointName);
+        if (holdSegment is null)
+            return;
+
+        // vatSys sets the ETO to DateTime.MaxValue when it has no estimate.
+        var now = DateTime.UtcNow;
+        var arrivalTime = holdSegment.ETO != DateTime.MaxValue && holdSegment.ETO > now ? holdSegment.ETO : now;
+
+        SetHold(fdr, waypointName, arrivalTime + DefaultHoldDuration);
+    }
+
+    /// <summary>
+    ///     Set the hold at the waypoint in the remarks, then initiate or update the hold.
     ///     <paramref name="waypointName"/> is the name in the flight plan route. Do nothing when
     ///     the controller does not have permission to change the flight plan.
     /// </summary>
-    public void SetDelay(FDP2.FDR fdr, DelayType type, string waypointName, TimeSpan delay)
+    public void SetHold(FDP2.FDR fdr, string waypointName, DateTime exitTime)
+    {
+        if (!fdr.HavePermission)
+            return;
+
+        DelayRemarks.SetHold(fdr, waypointName, exitTime);
+        SyncHold(fdr);
+    }
+
+    /// <summary>
+    ///     Set the delay (DLE) at the waypoint in the remarks. FDRPropertyChangedHandler calculates
+    ///     the ETOs again when the remarks change. <paramref name="waypointName"/> is the name in
+    ///     the flight plan route. Do nothing when the controller does not have permission to
+    ///     change the flight plan.
+    /// </summary>
+    public void SetDelay(FDP2.FDR fdr, string waypointName, TimeSpan delay)
     {
         if (!fdr.HavePermission || delay <= TimeSpan.Zero)
             return;
 
-        DelayRemarks.Set(fdr, type, waypointName, delay);
+        DelayRemarks.SetDelay(fdr, waypointName, delay);
         SyncHold(fdr);
     }
 
@@ -244,13 +276,38 @@ public class HoldService(
         if (!fdr.HavePermission)
             return;
 
-        DelayRemarks.Remove(fdr, DelayType.Delay, waypointName);
+        DelayRemarks.RemoveDelay(fdr, waypointName);
     }
 
-    // vatSys sets the ATO to DateTime.MaxValue until the aircraft overflies the hold point.
-    static DateTime? GetHoldEntryTime(FDP2.FDR.ExtractedRoute.Segment holdSegment)
+    /// <summary>
+    ///     Move the route back to the hold point. The hold point becomes the next waypoint, and the
+    ///     hold point and the segments after it have no ATO. Remove the position reports after the
+    ///     hold point. Add the EET and the distance of each removed position report to the next
+    ///     segment, the same as vatSys does.
+    /// </summary>
+    static void RewindRoute(FDP2.FDR fdr, FDP2.FDR.ExtractedRoute.Segment holdSegment)
     {
-        return holdSegment.ATO != DateTime.MaxValue ? holdSegment.ATO : null;
+        var route = fdr.ParsedRoute.ToList();
+        var holdPointIndex = route.IndexOf(holdSegment);
+
+        FDP2.FDR.ExtractedRoute.Segment? nextSegment = null;
+        for (var index = route.Count - 1; index >= holdPointIndex; index--)
+        {
+            var segment = route[index];
+            if (segment.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.APRUPR && nextSegment is not null)
+            {
+                nextSegment.EET += segment.EET;
+                nextSegment.Distance += segment.Distance;
+                fdr.ParsedRoute.Remove(segment);
+                continue;
+            }
+
+            segment.ATONoEvent = DateTime.MaxValue;
+            nextSegment = segment;
+        }
+
+        fdr.ParsedRoute.OverflownIndex = holdPointIndex - 1;
+        fdr.ParsedRoute.FirePropertyChanged("OverflownIndex");
     }
 
     // FDR property flags don't cleanly distinguish jurisdiction from incoming/outgoing handoff
@@ -284,14 +341,6 @@ public class HoldService(
         var holdSegment = fdr.FindHoldWaypoint(hold.HoldPoint);
         if (holdSegment is not null)
         {
-            // The hold started after the aircraft crossed the hold point. Remove the position reports
-            // that vatSys made after the hold point.
-            if (holdSegment.ATO != DateTime.MaxValue)
-            {
-                RemovePositionReportsAfter(fdr, holdSegment.ATO);
-                holdSegment.ATONoEvent = DateTime.MaxValue;
-            }
-
             // Before the hold point is the next waypoint, the aircraft is not near the hold point.
             // vatSys then only calculates the estimates again.
             var didEnterHold = hold.HoldEntryTime is not null;
@@ -307,29 +356,6 @@ public class HoldService(
         }
 
         FDP2.Process(fdr);
-
-        // Remove the APR segments with an ATO after the given time.
-        // Add the EET and the distance of each removed segment to the next segment, the same as vatSys does.
-        static void RemovePositionReportsAfter(FDP2.FDR fdr, DateTime time)
-        {
-            foreach (var segment in fdr.ParsedRoute.ToList())
-            {
-                if (segment.Type != FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.APRUPR)
-                    continue;
-
-                if (segment.ATO == DateTime.MaxValue || segment.ATO <= time)
-                    continue;
-
-                var index = fdr.ParsedRoute.IndexOf(segment);
-                if (index < 1 || index > fdr.ParsedRoute.Count - 2)
-                    continue;
-
-                var nextSegment = fdr.ParsedRoute[index + 1];
-                nextSegment.EET += segment.EET;
-                nextSegment.Distance += segment.Distance;
-                fdr.ParsedRoute.Remove(segment);
-            }
-        }
 
         // Add a position report at the radar position before the hold point, the same as vatSys does for an APR.
         // vatSys calculates the ETOs from the last ATO. Thus the ETO of the hold point is the time of the position

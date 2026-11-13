@@ -56,15 +56,12 @@ public class OpenHoldExitMenuHandler(
                     {
                         workQueue.Enqueue(async () =>
                         {
-                            // The remarks contain the hold, thus change the exit time to a delay
-                            // from the arrival time.
                             var hold = holdRepository.Find(holdItem.Callsign);
                             var holdSegment = hold is not null ? fdr.FindHoldWaypoint(hold.HoldPoint) : null;
-                            if (hold is null || holdSegment is null ||
-                                !fdr.TryGetHoldArrivalTime(holdSegment, hold.HoldEntryTime, out var arrivalTime))
+                            if (holdSegment is null)
                                 return;
 
-                            holdService.SetDelay(fdr, DelayType.Hold, holdSegment.GetFlightPlanName(), selectedTime - arrivalTime);
+                            holdService.SetHold(fdr, holdSegment.GetFlightPlanName(), selectedTime);
                         });
                     }
                 }
