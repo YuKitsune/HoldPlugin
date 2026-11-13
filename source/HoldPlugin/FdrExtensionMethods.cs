@@ -105,4 +105,47 @@ public static class FdrExtensionMethods
         return waypointsAhead.FirstOrDefault(s => s.GetFlightPlanName() == flightPlanName)
             ?? waypointsBehind.FirstOrDefault(s => s.GetFlightPlanName() == flightPlanName);
     }
+
+    // Find the hold-point waypoint on the route by its intersection name (HoldItem.HoldPoint).
+    // Search forward from the next waypoint first. Then search backward from the last overflown
+    // waypoint, because the aircraft can pass the hold point (e.g. a handoff is accepted after
+    // overflight). The backward search starts at the last overflown waypoint, so that it does not
+    // match a waypoint at the start of the route before a nearer one.
+    // Lat/long waypoints near each other can have the same name (e.g. 33 15+). The forward search
+    // must not start at the last overflown waypoint. If it does, the hold key finds the reroute
+    // waypoint at the aircraft position, and not the hold point after it.
+    public static FDP2.FDR.ExtractedRoute.Segment? FindHoldWaypoint(this FDP2.FDR fdr, string holdPointPrefix)
+    {
+        var route = fdr.ParsedRoute.ToList();
+        var nextIndex = Math.Max(fdr.ParsedRoute.OverflownIndex + 1, 0);
+
+        var waypointsAhead = route
+            .Skip(nextIndex)
+            .Where(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT)
+            .ToArray();
+
+        var match = FindMatchingWaypoint(waypointsAhead, holdPointPrefix);
+        if (match is not null)
+            return match;
+
+        var waypointsBehind = route
+            .Take(nextIndex)
+            .Where(s => s.Type == FDP2.FDR.ExtractedRoute.Segment.SegmentTypes.WAYPOINT)
+            .Reverse()
+            .ToArray();
+
+        return FindMatchingWaypoint(waypointsBehind, holdPointPrefix);
+
+        static FDP2.FDR.ExtractedRoute.Segment? FindMatchingWaypoint(
+            FDP2.FDR.ExtractedRoute.Segment[] waypoints,
+            string holdPointPrefix)
+        {
+            var match = waypoints.FirstOrDefault(s => s.Intersection.Name == holdPointPrefix);
+
+            if (match is null && holdPointPrefix.Length >= 3)
+                match = waypoints.FirstOrDefault(s => s.Intersection.Name.StartsWith(holdPointPrefix));
+
+            return match;
+        }
+    }
 }
