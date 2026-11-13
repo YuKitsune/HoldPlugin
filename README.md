@@ -57,6 +57,8 @@ To initiate a hold, select the aircraft, place your mouse cursor on the position
 - If the cursor is near a waypoint on the route, the hold initiated at that waypoint.
 - If the cursor is not near a waypoint on the route, the aircraft is re-routed to the cursor position to hold there.
 
+You can also left-click the name of the waypoint in the strip, then select `Hold`.
+
 The hold has a default length of 10 minutes.
 
 You can change the `F8` key in `Settings` > `Keyboard`.
