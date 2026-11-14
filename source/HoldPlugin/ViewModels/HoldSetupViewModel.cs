@@ -2,39 +2,45 @@
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
 using HoldPlugin.Contracts;
+using MediatR;
+using vatSysToolbox;
+using vatSysToolbox.Windows;
 
 namespace HoldPlugin.ViewModels;
 
 public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlotsUpdatedCommand>
 {
     readonly HoldSlotRepository _holdSlotRepository;
-    readonly GuiInvoker _guiInvoker;
+    readonly IGuiInvoker _guiInvoker;
     readonly IErrorReporter _errorReporter;
+    readonly IMediator _mediator;
 
     [ObservableProperty] HoldButtonViewModel _button1;
     [ObservableProperty] HoldButtonViewModel _button2;
     [ObservableProperty] HoldButtonViewModel _button3;
     [ObservableProperty] HoldButtonViewModel _button4;
 
-    public HoldSetupViewModel(HoldSlotRepository holdSlotRepository, GuiInvoker guiInvoker, IErrorReporter errorReporter)
+    public HoldSetupViewModel(HoldSlotRepository holdSlotRepository, IGuiInvoker guiInvoker, IErrorReporter errorReporter, IMediator mediator)
     {
         _holdSlotRepository = holdSlotRepository;
         _guiInvoker = guiInvoker;
         _errorReporter = errorReporter;
+        _mediator = mediator;
 
         var holds = _holdSlotRepository.GetSlots();
 
-        Button1 = new HoldButtonViewModel(0, holds[0].GetHoldPointName() ?? string.Empty, this, _errorReporter);
-        Button2 = new HoldButtonViewModel(1, holds[1].GetHoldPointName() ?? string.Empty, this, _errorReporter);
-        Button3 = new HoldButtonViewModel(2, holds[2].GetHoldPointName() ?? string.Empty, this, _errorReporter);
-        Button4 = new HoldButtonViewModel(3, holds[3].GetHoldPointName() ?? string.Empty, this, _errorReporter);
+        Button1 = new HoldButtonViewModel(0, holds[0].GetHoldPointName() ?? string.Empty, this, _errorReporter, _mediator);
+        Button2 = new HoldButtonViewModel(1, holds[1].GetHoldPointName() ?? string.Empty, this, _errorReporter, _mediator);
+        Button3 = new HoldButtonViewModel(2, holds[2].GetHoldPointName() ?? string.Empty, this, _errorReporter, _mediator);
+        Button4 = new HoldButtonViewModel(3, holds[3].GetHoldPointName() ?? string.Empty, this, _errorReporter, _mediator);
 
         WeakReferenceMessenger.Default.Register(this);
     }
 
+    // The slots change on the work queue thread. The view binds to the buttons, thus change them on the UI thread.
     public void Receive(HoldSlotsUpdatedCommand message)
     {
-        _guiInvoker.InvokeOnUiThread(_ =>
+        _guiInvoker.InvokeOnGUI(_ =>
         {
             var descriptors = _holdSlotRepository.GetSlots();
             Button1.HoldPointName = descriptors[0].GetHoldPointName();
@@ -68,16 +74,18 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
         readonly int _index;
         readonly HoldSetupViewModel _parent;
         readonly IErrorReporter _errorReporter;
+        readonly IMediator _mediator;
 
         [ObservableProperty] string? _holdPointName;
         [ObservableProperty] bool _isEditing;
         [ObservableProperty] string _editValue = "";
 
-        public HoldButtonViewModel(int index, string pointName, HoldSetupViewModel parent, IErrorReporter errorReporter)
+        public HoldButtonViewModel(int index, string pointName, HoldSetupViewModel parent, IErrorReporter errorReporter, IMediator mediator)
         {
             _index = index;
             _parent = parent;
             _errorReporter = errorReporter;
+            _mediator = mediator;
             
             HoldPointName = pointName;
         }
@@ -96,7 +104,7 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
         }
 
         [RelayCommand]
-        void CommitEdit()
+        async Task CommitEdit()
         {
             if (!IsEditing)
                 return;
@@ -107,7 +115,7 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
             if (!string.IsNullOrWhiteSpace(trimmedValue) &&
                 _parent.IsHoldPointNameTaken(trimmedValue, _index))
             {
-                _errorReporter.ReportError($"Hold Window for {trimmedValue} already exists");
+                _errorReporter.ReportError(new Exception($"Hold Window for {trimmedValue} already exists"));
                 
                 IsEditing = false;
                 EditValue = "";
@@ -117,7 +125,14 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
             // If there was a previous hold point, delete it
             if (!string.IsNullOrWhiteSpace(HoldPointName))
             {
-                WeakReferenceMessenger.Default.Send(new HoldPointRemovedCommand(HoldPointName));
+                try
+                {
+                    await _mediator.Send(new HoldPointRemovedCommand(HoldPointName));
+                }
+                catch (Exception ex)
+                {
+                    _errorReporter.ReportError(ex);
+                }
             }
 
             // Update the hold point name
@@ -128,7 +143,14 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
             // If the new name is not empty, create the hold list
             if (!string.IsNullOrWhiteSpace(HoldPointName))
             {
-                WeakReferenceMessenger.Default.Send(new HoldPointAddedCommand(_index, HoldPointName));
+                try
+                {
+                    await _mediator.Send(new HoldPointAddedCommand(_index, HoldPointName));
+                }
+                catch (Exception ex)
+                {
+                    _errorReporter.ReportError(ex);
+                }
             }
 
             IsEditing = false;

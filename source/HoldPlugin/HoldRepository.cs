@@ -1,9 +1,9 @@
 namespace HoldPlugin;
 
 /// <summary>
-///     Stores the active holds. All access uses one lock, so you can use this class from all
-///     threads. The read methods return copies, and hold items are immutable, so callers cannot
-///     change the stored data directly.
+///     Stores the active holds. All access uses one lock, so you can
+///     use this class from all threads. The read methods return copies, and hold items are
+///     immutable, so callers cannot change the stored data directly.
 /// </summary>
 public class HoldRepository
 {

@@ -21,14 +21,15 @@ using Serilog;
     GitHubActionsImage.WindowsLatest,
     OnPushBranches = ["main"],
     OnPullRequestBranches = ["main"],
-    InvokedTargets = [nameof(Compile)],
+    InvokedTargets = [nameof(AddNuGetSource), nameof(Compile)],
+    ImportSecrets = [nameof(NuGetUsername), nameof(NuGetToken)],
     FetchDepth = 0)]
 [GitHubActions(
     "release",
     GitHubActionsImage.WindowsLatest,
     OnPushTags = ["v*"],
-    InvokedTargets = [nameof(Release)],
-    ImportSecrets = [nameof(GitHubToken)],
+    InvokedTargets = [nameof(AddNuGetSource), nameof(Release)],
+    ImportSecrets = [nameof(GitHubToken), nameof(NuGetUsername), nameof(NuGetToken)],
     EnableGitHubToken = true,
     FetchDepth = 0,
     WritePermissions = [GitHubActionsPermissions.Contents])]
@@ -52,11 +53,25 @@ class Build : FalloutBuild
     [Secret]
     readonly string GitHubToken;
 
+    [Parameter("GitHub username for the NuGet feed")]
+    readonly string NuGetUsername;
+
+    [Parameter("GitHub personal access token (classic) with the read:packages scope, for the NuGet feed")]
+    [Secret]
+    readonly string NuGetToken;
+
     [GitRepository]
     readonly GitRepository GitRepository;
 
     [GitVersion]
     readonly GitVersion GitVersion;
+
+    [Parameter("Version to use instead of the GitVersion version (e.g. 1.0.0-rc1)")]
+    readonly string ForceVersion;
+
+    // The NuGet feed that contains the vatSysToolbox package
+    const string NuGetSourceName = "YuKitsune";
+    const string NuGetSourceUrl = "https://nuget.pkg.github.com/YuKitsune/index.json";
 
     const string ReleasePluginName = "HoldPlugin";
     const string DebugPluginName = "HoldPlugin - Debug";
@@ -126,8 +141,43 @@ class Build : FalloutBuild
             Log.Information("vatSys.exe extracted to {Path}", VatSysExePath);
         });
 
+    Target AddNuGetSource => _ => _
+        .Description("Adds the GitHub Packages NuGet feed with the GitHub credentials, or updates the credentials.")
+        .Requires(() => NuGetUsername)
+        .Requires(() => NuGetToken)
+        .Executes(() =>
+        {
+            // The .NET CLI can encrypt the password only on Windows
+            var storePasswordInClearText = !OperatingSystem.IsWindows();
+
+            var sourceExists = DotNetTasks.DotNet("nuget list source", logOutput: false)
+                .Any(o => o.Text.Contains(NuGetSourceUrl));
+
+            if (sourceExists)
+            {
+                Log.Information("Updating the credentials of the NuGet source {Name}", NuGetSourceName);
+                DotNetTasks.DotNetNuGetUpdateSource(s => s
+                    .SetName(NuGetSourceName)
+                    .SetSource(NuGetSourceUrl)
+                    .SetUsername(NuGetUsername)
+                    .SetPassword(NuGetToken)
+                    .SetStorePasswordInClearText(storePasswordInClearText));
+            }
+            else
+            {
+                Log.Information("Adding the NuGet source {Name}", NuGetSourceName);
+                DotNetTasks.DotNetNuGetAddSource(s => s
+                    .SetName(NuGetSourceName)
+                    .SetSource(NuGetSourceUrl)
+                    .SetUsername(NuGetUsername)
+                    .SetPassword(NuGetToken)
+                    .SetStorePasswordInClearText(storePasswordInClearText));
+            }
+        });
+
     Target Compile => _ => _
         .DependsOn(DownloadVatSys)
+        .After(AddNuGetSource)
         .Executes(() =>
         {
             var version = GetSemanticVersion();
@@ -142,8 +192,8 @@ class Build : FalloutBuild
                 .SetConfiguration(Configuration)
                 .SetOutputDirectory(PluginBuildOutputDirectory)
                 .SetVersion(version)
-                .SetAssemblyVersion(GitVersion?.MajorMinorPatch ?? "0.0.0")
-                .SetFileVersion(GitVersion?.MajorMinorPatch ?? "0.0.0")
+                .SetAssemblyVersion(GetMajorMinorPatch())
+                .SetFileVersion(GetMajorMinorPatch())
                 .SetInformationalVersion(version)
                 .SetProperty("VatSysPath", VatSysExePath.Parent.Parent));
         });
@@ -242,7 +292,6 @@ class Build : FalloutBuild
         .Requires(() => Configuration == Configuration.Release)
         .Executes(() =>
         {
-            var dpiAwareFixScript = RootDirectory / "dpiawarefix.bat";
             var unblockDllsScript = RootDirectory / "unblock-dlls.bat";
 
             PluginPackageDirectory.CreateOrCleanDirectory();
@@ -253,7 +302,6 @@ class Build : FalloutBuild
                 absolutePath.CopyToDirectory(PluginPackageDirectory, ExistsPolicy.MergeAndOverwrite);
             }
 
-            dpiAwareFixScript.CopyToDirectory(PluginPackageDirectory, ExistsPolicy.FileOverwrite);
             unblockDllsScript.CopyToDirectory(PluginPackageDirectory, ExistsPolicy.FileOverwrite);
 
             if (PluginZipPath.FileExists())
@@ -319,8 +367,24 @@ class Build : FalloutBuild
         return Path.Combine(documentsPath, "vatSys Files", "Profiles", profileName);
     }
 
+    // The assembly version and the file version cannot have a pre-release label or build metadata.
+    string GetMajorMinorPatch()
+    {
+        if (!string.IsNullOrEmpty(ForceVersion))
+        {
+            return ForceVersion.Split('-', '+')[0];
+        }
+
+        return GitVersion?.MajorMinorPatch ?? "0.0.0";
+    }
+
     private string GetSemanticVersion()
     {
+        if (!string.IsNullOrEmpty(ForceVersion))
+        {
+            return ForceVersion;
+        }
+
         if (GitVersion is null)
         {
             return "0.0.0";

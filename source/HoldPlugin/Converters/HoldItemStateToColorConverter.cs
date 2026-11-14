@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Windows.Data;
 using System.Windows.Media;
 using HoldPlugin.ViewModels;
+using vatsys;
+using vatSysToolbox;
 
 namespace HoldPlugin.Converters;
 
@@ -15,8 +17,8 @@ public class HoldItemStateToColorConverter : IValueConverter
 
         return state switch
         {
-            HoldItemState.Jurisdiction => Theme.JurisdictionColor,
-            HoldItemState.Handover => Theme.HandoverColor,
+            HoldItemState.Jurisdiction => VatSysColours.GetColour(Colours.Identities.Jurisdiction),
+            HoldItemState.Handover => VatSysColours.GetColour(Colours.Identities.Handover),
             _ => throw new ArgumentOutOfRangeException(nameof(state))
         };
     }
