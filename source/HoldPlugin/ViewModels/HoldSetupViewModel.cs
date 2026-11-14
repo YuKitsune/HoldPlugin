@@ -37,6 +37,7 @@ public partial class HoldSetupViewModel : ObservableObject, IRecipient<HoldSlots
         WeakReferenceMessenger.Default.Register(this);
     }
 
+    // The slots change on the work queue thread. The view binds to the buttons, thus change them on the UI thread.
     public void Receive(HoldSlotsUpdatedCommand message)
     {
         _guiInvoker.InvokeOnGUI(_ =>

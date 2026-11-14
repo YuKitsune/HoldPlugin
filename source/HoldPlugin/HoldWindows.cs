@@ -40,15 +40,13 @@ public class HoldWindows(
             canMinimise: false);
     }
 
+    // The window manager opens and closes the window on the UI thread. Thus, you can call this method on any thread.
     public void ToggleHoldSetup()
     {
-        guiInvoker.InvokeOnGUI(_ =>
-        {
-            if (windowManager.TryGetWindow(WindowKeys.HoldSetup, out var _))
-                windowManager.CloseWindow(WindowKeys.HoldSetup);
-            else
-                OpenHoldSetup();
-        });
+        if (windowManager.TryGetWindow(WindowKeys.HoldSetup, out var _))
+            windowManager.CloseWindow(WindowKeys.HoldSetup);
+        else
+            OpenHoldSetup();
     }
 
     // Tells the other plugins (for example, the HLD SET button of the Eurocat Menus plugin) that a window opened or
@@ -81,7 +79,7 @@ public class HoldWindows(
                 .Where(h => h.HoldPoint == holdPointName && h.State != HoldItemState.Unconcerned)
                 .ToArray();
 
-            if (itemsToDisplay.Any())
+            if (itemsToDisplay.Any() && !IsWindowOpen(WindowKeys.HoldFor(holdPointName)))
             {
                 windowManager.TryCreateWindow(
                     WindowKeys.HoldFor(holdPointName),
@@ -103,7 +101,7 @@ public class HoldWindows(
         var otherHolds = holds
             .Where(h => !allocatedNames.Contains(h.HoldPoint) && h.State != HoldItemState.Unconcerned)
             .ToArray();
-        if (otherHolds.Any())
+        if (otherHolds.Any() && !IsWindowOpen(WindowKeys.HoldOther))
         {
             windowManager.TryCreateWindow(
                 WindowKeys.HoldOther,
@@ -120,6 +118,10 @@ public class HoldWindows(
                 new Size(480, 150));
         }
     }
+
+    // This method runs at each refresh of the holds. TryCreateWindow posts to the UI thread also when the window is
+    // open. Thus, do not call it for a window that is open.
+    bool IsWindowOpen(string key) => windowManager.TryGetWindow(key, out _);
 
     public static HashSet<string> GetAllocatedHoldPointNames(IHoldPointDescriptor[] slots) =>
         slots

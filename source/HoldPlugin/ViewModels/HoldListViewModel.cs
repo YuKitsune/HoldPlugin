@@ -77,6 +77,8 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
         WeakReferenceMessenger.Default.Register(this);
     }
 
+    // The holds change on the work queue thread. The view binds to Items, and Refresh can close the window. Both must
+    // change on the UI thread.
     public void Receive(RefreshHoldsCommand message)
     {
         _guiInvoker.InvokeOnGUI(_ => Refresh(_holdRepository.GetHolds()));

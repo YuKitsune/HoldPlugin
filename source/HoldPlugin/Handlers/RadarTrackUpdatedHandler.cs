@@ -27,6 +27,11 @@ public class RadarTrackUpdatedHandler(
                 if (holdItem is null)
                     return;
 
+                // vatSys sends a radar update for each track every few seconds. Refresh the hold lists only when the
+                // level changes, because each refresh posts to the UI thread.
+                if (holdItem.Level == updated.CorrectedAltitude)
+                    return;
+
                 holdRepository.Update(holdItem.Callsign, h => h with { Level = updated.CorrectedAltitude });
                 holdService.RefreshHolds();
             }
