@@ -56,6 +56,12 @@ public static class HoldPatches
         return fdr.ParsedRoute.IndexOf(holdSegment);
     }
 
+    // Returns true if vatSys can sequence the route to the segment: set its ATO and mark it as
+    // overflown. Before the aircraft gets to the hold point, vatSys can sequence only to the
+    // segments before the hold point. In the hold, all sequencing stops.
+    static bool CanSequenceTo(HoldItem hold, int holdPointIndex, int segmentIndex) =>
+        hold.HoldEntryTime is null && segmentIndex < holdPointIndex;
+
     // Make a copy of a segment for the display only. It is not in the route of the FDR.
     static FDP2.FDR.ExtractedRoute.Segment CreateSegmentCopy(
         FDP2.FDR fdr,
@@ -178,10 +184,11 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     In a hold, do not let vatSys set ATOs for the hold point, or for the segments after it.
-    ///     vatSys can set ATOs for the segments before the hold point. When vatSys finds that the
-    ///     aircraft crossed the hold point, record the hold entry time. The hold continues until
-    ///     the controller cancels it, also after the exit time.
+    ///     Before the aircraft gets to the hold point, do not let vatSys set ATOs for the hold
+    ///     point, or for the segments after it. vatSys can set ATOs for the segments before the
+    ///     hold point. When vatSys finds that the aircraft crossed the hold point, record the hold
+    ///     entry time. In the hold, do not let vatSys set ATOs for any segment. The hold continues
+    ///     until the controller cancels it, also after the exit time.
     /// </summary>
     [HarmonyPatch(typeof(RDP), "AutomaticPositionReport")]
     static class AutomaticPositionReportPatch
@@ -202,25 +209,26 @@ public static class HoldPatches
             try
             {
                 var fdr = rt.CoupledFDR;
-                if (fdr is null || !TryGetHoldPointIndex(fdr, out _, out var holdPointIndex))
+                if (fdr is null || !TryGetHoldPointIndex(fdr, out var hold, out var holdPointIndex))
                     return true;
+
+                if (hold.HoldEntryTime is not null)
+                    return false;
 
                 // vatSys found that the aircraft crossed a waypoint.
                 if (segment is not null)
                 {
                     var segmentIndex = fdr.ParsedRoute.IndexOf(segment);
-                    if (segmentIndex < holdPointIndex)
-                        return true;
-
                     if (segmentIndex == holdPointIndex)
                     {
                         _holds.Update(fdr.Callsign, h => h with { HoldEntryTime = h.HoldEntryTime ?? DateTime.UtcNow });
 
                         // Calculate the ETOs again from the hold entry time.
                         FDP2.Process(fdr);
+                        return false;
                     }
 
-                    return false;
+                    return CanSequenceTo(hold, holdPointIndex, segmentIndex);
                 }
 
                 // vatSys adds an APR segment before the route index that it finds.
@@ -249,6 +257,115 @@ public static class HoldPatches
                 return index;
 
             while (index + 1 < route.Count && route[index].Distance == 0.0)
+                index++;
+
+            return index;
+        }
+    }
+
+    /// <summary>
+    ///     vatSys also sets ATOs from the ATO estimates of other controllers, and from a direct-to
+    ///     or a reroute from the aircraft position. Apply the same sequencing rules as
+    ///     <see cref="AutomaticPositionReportPatch"/>. The controller can always set an ATO
+    ///     from the time menu of a waypoint (see <see cref="OpenPETOMenuPatch"/>).
+    /// </summary>
+    [HarmonyPatch(typeof(FDP2), nameof(FDP2.PositionReport))]
+    static class PositionReportPatch
+    {
+        static bool Prefix(FDP2.FDR fdr, FDP2.FDR.ExtractedRoute.Segment atpoint)
+        {
+            try
+            {
+                if (OpenPETOMenuPatch.IsOpen)
+                    return true;
+
+                if (!TryGetHoldPointIndex(fdr, out var hold, out var holdPointIndex))
+                    return true;
+
+                return CanSequenceTo(hold, holdPointIndex, fdr.ParsedRoute.IndexOf(atpoint));
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     The time menu of a waypoint calls FDP2.PositionReport on the same thread when the
+    ///     controller sets an ATO. Record that the menu is open, so that
+    ///     <see cref="PositionReportPatch"/> lets the controller set the ATO.
+    /// </summary>
+    [HarmonyPatch(typeof(MMI), nameof(MMI.OpenPETOMenu))]
+    static class OpenPETOMenuPatch
+    {
+        [ThreadStatic] public static bool IsOpen;
+
+        static void Prefix() => IsOpen = true;
+
+        static void Finalizer() => IsOpen = false;
+    }
+
+    /// <summary>
+    ///     A user position report (UPR) for a flight plan track (with no radar track) adds a UPR
+    ///     segment, and sets the ATO of the last waypoint before it. Apply the same sequencing
+    ///     rules as <see cref="AutomaticPositionReportPatch"/>.
+    /// </summary>
+    [HarmonyPatch(typeof(FDP2), nameof(FDP2.UserPositionReport))]
+    static class UserPositionReportPatch
+    {
+        static bool Prefix(FDP2.FDR fdr, Coordinate position, int routeTolerance)
+        {
+            try
+            {
+                if (!TryGetHoldPointIndex(fdr, out var hold, out var holdPointIndex))
+                    return true;
+
+                if (hold.HoldEntryTime is not null)
+                    return false;
+
+                // vatSys adds the UPR segment before the route index that it finds.
+                return FindUserPositionReportIndex(fdr, position, routeTolerance) <= holdPointIndex;
+            }
+            catch (Exception ex)
+            {
+                _errorReporter.ReportError(ex);
+                return true;
+            }
+        }
+
+        // Find the route index that vatSys adds the UPR segment before, the same as vatSys does.
+        // Returns -1 if vatSys does not add a UPR segment.
+        static int FindUserPositionReportIndex(FDP2.FDR fdr, Coordinate position, int routeTolerance)
+        {
+            var route = fdr.ParsedRoute.ToList();
+
+            var index = -1;
+            var minimumCrossTrackDistance = double.MaxValue;
+            for (var i = 1; i < route.Count; i++)
+            {
+                var from = route[i - 1].Intersection.LatLong;
+                var to = route[i].Intersection.LatLong;
+
+                var crossTrackDistance = Math.Abs(Conversions.CalculateCrossTrackDistance(from, to, position));
+                if (crossTrackDistance >= routeTolerance || crossTrackDistance >= minimumCrossTrackDistance)
+                    continue;
+
+                var alongTrackDistanceFrom = Conversions.CalculateAlongTrackDistance(from, to, position);
+                var alongTrackDistanceTo = Conversions.CalculateAlongTrackDistance(to, from, position);
+                var distance = Conversions.CalculateDistance(from, to);
+                if (Math.Abs(distance - (alongTrackDistanceFrom + alongTrackDistanceTo)) >= 0.1)
+                    continue;
+
+                index = i;
+                minimumCrossTrackDistance = crossTrackDistance;
+            }
+
+            if (index < 1)
+                return index;
+
+            while (index + 1 < route.Count && route[index + 1].Distance == 0.0)
                 index++;
 
             return index;
