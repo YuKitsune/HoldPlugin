@@ -2,6 +2,9 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Messaging;
 using HoldPlugin.Contracts;
+using MediatR;
+using vatSysToolbox;
+using vatSysToolbox.Windows;
 
 namespace HoldPlugin.ViewModels;
 
@@ -10,7 +13,9 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
     readonly HoldRepository _holdRepository;
     readonly HoldSlotRepository _holdSlotRepository;
     readonly IWindowHandle _windowHandle;
-    readonly GuiInvoker _guiInvoker;
+    readonly IGuiInvoker _guiInvoker;
+    readonly IMediator _mediator;
+    readonly IErrorReporter _errorReporter;
     
     [ObservableProperty] string _holdPointName = "";
     [ObservableProperty] ObservableCollection<HoldItemViewModel> _items = [];
@@ -23,6 +28,8 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
         _holdSlotRepository = null!;
         _guiInvoker = null!;
         _windowHandle = null!;
+        _mediator = null!;
+        _errorReporter = null!;
         
         Items =
         [
@@ -34,7 +41,9 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
                 null,
                 DateTime.Now.AddMinutes(30),
                 "H/RIV",
-                HoldItemState.Jurisdiction)
+                HoldItemState.Jurisdiction,
+                _mediator,
+                _errorReporter)
             {
                 IsDesignated = true
             },
@@ -46,17 +55,21 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
                 DateTime.Now.AddMinutes(20),
                 DateTime.Now.AddMinutes(30),
                 "H/TAR",
-                HoldItemState.Handover)
+                HoldItemState.Handover,
+                _mediator,
+                _errorReporter)
         ];
     }
 #endif
 
-    public HoldListViewModel(string pointName, HoldItem[] items, HoldRepository holdRepository, HoldSlotRepository holdSlotRepository, IWindowHandle windowHandle, GuiInvoker guiInvoker)
+    public HoldListViewModel(string pointName, HoldItem[] items, HoldRepository holdRepository, HoldSlotRepository holdSlotRepository, IWindowHandle windowHandle, IGuiInvoker guiInvoker, IMediator mediator, IErrorReporter errorReporter)
     {
         _holdRepository = holdRepository;
         _holdSlotRepository = holdSlotRepository;
         _windowHandle = windowHandle;
         _guiInvoker = guiInvoker;
+        _mediator = mediator;
+        _errorReporter = errorReporter;
 
         HoldPointName = pointName;
         UpdateItems(items);
@@ -64,9 +77,11 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
         WeakReferenceMessenger.Default.Register(this);
     }
 
+    // The holds change on the work queue thread. The view binds to Items, and Refresh can close the window. Both must
+    // change on the UI thread.
     public void Receive(RefreshHoldsCommand message)
     {
-        _guiInvoker.InvokeOnUiThread(_ => Refresh(_holdRepository.GetHolds()));
+        _guiInvoker.InvokeOnGUI(_ => Refresh(_holdRepository.GetHolds()));
     }
 
     // The holds can change between the time the window is requested and the time it is shown.
@@ -103,7 +118,7 @@ public partial class HoldListViewModel : ObservableObject, IRecipient<RefreshHol
             }
             else
             {
-                Items.Add(new HoldItemViewModel(relevantHoldItem));
+                Items.Add(new HoldItemViewModel(relevantHoldItem, _mediator, _errorReporter));
             }
 
             callsigns.Remove(relevantHoldItem.Callsign);
