@@ -15,7 +15,7 @@ public class CancelHoldHandler(
 {
     public Task Handle(CancelHoldCommand request, CancellationToken cancellationToken)
     {
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {

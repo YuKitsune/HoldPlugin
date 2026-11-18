@@ -24,7 +24,7 @@ public class RefreshHoldsHandler(HoldWindows holdWindows, WorkQueue workQueue, I
             errorReporter.ReportError(ex);
         }
 
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {

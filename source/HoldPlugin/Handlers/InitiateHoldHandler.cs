@@ -19,7 +19,7 @@ public class InitiateHoldHandler(
 {
     public Task Handle(InitiateHoldCommand request, CancellationToken cancellationToken)
     {
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {

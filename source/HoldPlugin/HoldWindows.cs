@@ -1,4 +1,3 @@
-using System.Windows;
 using HoldPlugin.Controls;
 using HoldPlugin.ViewModels;
 using MediatR;
@@ -23,39 +22,43 @@ public class HoldWindows(
     // The messages that the plugin sends have no data
     static readonly MessageContent EmptyContent = new("application/json", "{}"u8.ToArray());
 
-    public void OpenHoldSetup()
-    {
-        windowManager.TryCreateWindow(
-            WindowKeys.HoldSetup,
-            "Hold Setup",
-            windowHandle =>
-            {
-                windowHandle.Closed += (_, _) => _ = Broadcast(HoldMessages.SetupWindowClosed);
-                _ = Broadcast(HoldMessages.SetupWindowOpened);
+    static readonly WindowOptions HoldSetupOptions = new() { CanMinimise = false };
 
-                var viewModel = new HoldSetupViewModel(holdSlotRepository, guiInvoker, errorReporter, mediator);
-                var view = new HoldSetup(viewModel);
-                return view;
-            },
-            canMinimise: false);
-    }
+    static readonly WindowOptions HoldListOptions = new()
+    {
+        Size = WindowSize.Absolute(480, 150),
+        CanClose = false,
+        CanMinimise = false
+    };
+
+    public void OpenHoldSetup() =>
+        windowManager.Open(WindowKeys.HoldSetup, "Hold Setup", CreateHoldSetup, HoldSetupOptions);
 
     // The window manager opens and closes the window on the UI thread. Thus, you can call this method on any thread.
-    public void ToggleHoldSetup()
+    public void ToggleHoldSetup() =>
+        windowManager.Toggle(WindowKeys.HoldSetup, "Hold Setup", CreateHoldSetup, HoldSetupOptions);
+
+    HoldSetup CreateHoldSetup(IWindowHandle windowHandle)
     {
-        if (windowManager.TryGetWindow(WindowKeys.HoldSetup, out var _))
-            windowManager.CloseWindow(WindowKeys.HoldSetup);
-        else
-            OpenHoldSetup();
+        // The handle has no Closed event. A close that no handler cancels closes the window.
+        windowHandle.BeforeClose += (_, e) =>
+        {
+            if (!e.Cancel)
+                Broadcast(HoldMessages.SetupWindowClosed);
+        };
+        Broadcast(HoldMessages.SetupWindowOpened);
+
+        var viewModel = new HoldSetupViewModel(holdSlotRepository, guiInvoker, errorReporter, mediator);
+        return new HoldSetup(viewModel);
     }
 
     // Tells the other plugins (for example, the HLD SET button of the Eurocat Menus plugin) that a window opened or
     // closed
-    async Task Broadcast(string messageType)
+    void Broadcast(string messageType)
     {
         try
         {
-            await messenger.Broadcast(messageType, EmptyContent);
+            messenger.Broadcast(messageType, EmptyContent);
         }
         catch (Exception ex)
         {
@@ -81,19 +84,15 @@ public class HoldWindows(
 
             if (itemsToDisplay.Any() && !IsWindowOpen(WindowKeys.HoldFor(holdPointName)))
             {
-                windowManager.TryCreateWindow(
+                windowManager.Open(
                     WindowKeys.HoldFor(holdPointName),
                     $"HOLD {holdPointName} WINDOW",
                     handle =>
                     {
                         var viewModel = new HoldListViewModel(holdPointName, itemsToDisplay, holdRepository, holdSlotRepository, handle, guiInvoker, mediator, errorReporter);
-                        var view = new HoldList(viewModel);
-                        return view;
+                        return new HoldList(viewModel);
                     },
-                    sizeToContent: false,
-                    canClose: false,
-                    canMinimise: false,
-                    new Size(480, 150));
+                    HoldListOptions);
             }
         }
 
@@ -103,25 +102,21 @@ public class HoldWindows(
             .ToArray();
         if (otherHolds.Any() && !IsWindowOpen(WindowKeys.HoldOther))
         {
-            windowManager.TryCreateWindow(
+            windowManager.Open(
                 WindowKeys.HoldOther,
                 "HOLD OTHER WINDOW",
                 handle =>
                 {
                     var viewModel = new HoldListViewModel(string.Empty, otherHolds, holdRepository, holdSlotRepository, handle, guiInvoker, mediator, errorReporter);
-                    var view = new HoldList(viewModel);
-                    return view;
+                    return new HoldList(viewModel);
                 },
-                sizeToContent: false,
-                canClose: false,
-                canMinimise: false,
-                new Size(480, 150));
+                HoldListOptions);
         }
     }
 
-    // This method runs at each refresh of the holds. TryCreateWindow posts to the UI thread also when the window is
-    // open. Thus, do not call it for a window that is open.
-    bool IsWindowOpen(string key) => windowManager.TryGetWindow(key, out _);
+    // This method runs at each refresh of the holds. Open posts to the UI thread also when the window is open. Thus,
+    // do not call it for a window that is open.
+    bool IsWindowOpen(string key) => windowManager.IsOpen(key);
 
     public static HashSet<string> GetAllocatedHoldPointNames(IHoldPointDescriptor[] slots) =>
         slots

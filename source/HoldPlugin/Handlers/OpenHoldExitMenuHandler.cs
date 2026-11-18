@@ -54,7 +54,7 @@ public class OpenHoldExitMenuHandler(
                     var selectedTime = (DateTime)window.GetType().GetField("SelectedTime").GetValue(window);
                     if (selectedTime >= DateTime.UtcNow)
                     {
-                        workQueue.Enqueue(async () =>
+                        workQueue.Enqueue(async _ =>
                         {
                             var hold = holdRepository.Find(holdItem.Callsign);
                             var holdSegment = hold is not null ? fdr.FindHoldWaypoint(hold.HoldPoint) : null;

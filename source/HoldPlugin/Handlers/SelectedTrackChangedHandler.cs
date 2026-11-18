@@ -15,7 +15,7 @@ public class SelectedTrackChangedHandler(
 {
     public Task Handle(SelectedTrackChangedNotification notification, CancellationToken cancellationToken)
     {
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {

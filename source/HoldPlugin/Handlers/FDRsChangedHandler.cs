@@ -14,7 +14,7 @@ public class FDRsChangedHandler(
 {
     public Task Handle(FDRsChangedNotification notification, CancellationToken cancellationToken)
     {
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {

@@ -40,7 +40,10 @@ public class Plugin : IPlugin
     {
         var serviceProvider = new ServiceCollection()
             .AddLogging()
-            .AddVatSysToolbox(Name, MailboxName)
+            .AddErrorReporter(Name)
+            .AddWindowManager()
+            .AddWorkQueue()
+            .AddPluginMessenger(MailboxName)
             .AddMediatR(c => c.RegisterServicesFromAssemblyContaining<Plugin>())
             .AddSingleton<HoldRepository>()
             .AddSingleton<HoldSlotRepository>()

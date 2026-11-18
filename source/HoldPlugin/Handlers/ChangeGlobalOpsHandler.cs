@@ -10,7 +10,7 @@ public class ChangeGlobalOpsHandler(WorkQueue workQueue, IErrorReporter errorRep
 {
     public Task Handle(ChangeGlobalOpsCommand request, CancellationToken cancellationToken)
     {
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {

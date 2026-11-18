@@ -17,7 +17,7 @@ public class HoldPointRemovedHandler(
 {
     public Task Handle(HoldPointRemovedCommand request, CancellationToken cancellationToken)
     {
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {
@@ -25,7 +25,7 @@ public class HoldPointRemovedHandler(
                     return;
 
                 // Close the window for this hold point
-                windowManager.CloseWindow(WindowKeys.HoldFor(request.PointName));
+                windowManager.Close(WindowKeys.HoldFor(request.PointName));
 
                 // Check if any aircraft were holding at this point
                 var holdsAtRemovedPoint = holdRepository.GetHolds().Where(h => h.HoldPoint == request.PointName).ToArray();

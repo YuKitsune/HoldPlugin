@@ -18,7 +18,7 @@ public class HoldPointAddedHandler(
 {
     public Task Handle(HoldPointAddedCommand request, CancellationToken cancellationToken)
     {
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {
@@ -35,7 +35,7 @@ public class HoldPointAddedHandler(
                 // Close OTHER window only if no aircraft should be in it
                 if (!otherHolds.Any())
                 {
-                    windowManager.CloseWindow(WindowKeys.HoldOther);
+                    windowManager.Close(WindowKeys.HoldOther);
                 }
 
                 holdWindows.EnsureHoldWindowsAreOpen();

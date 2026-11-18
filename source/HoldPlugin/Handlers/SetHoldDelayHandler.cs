@@ -11,7 +11,7 @@ public class SetHoldDelayHandler(HoldService holdService, WorkQueue workQueue, I
 {
     public Task Handle(SetHoldDelayCommand request, CancellationToken cancellationToken)
     {
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {

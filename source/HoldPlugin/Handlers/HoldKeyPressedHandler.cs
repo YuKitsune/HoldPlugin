@@ -20,7 +20,7 @@ public class HoldKeyPressedHandler(
 {
     public Task Handle(HoldKeyPressedCommand request, CancellationToken cancellationToken)
     {
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {

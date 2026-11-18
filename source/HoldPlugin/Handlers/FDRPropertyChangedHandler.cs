@@ -34,7 +34,7 @@ public class FDRPropertyChangedHandler(HoldService holdService, WorkQueue workQu
 
         var fdr = notification.FDR;
 
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {

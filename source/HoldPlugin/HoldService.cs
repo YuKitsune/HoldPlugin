@@ -422,7 +422,7 @@ public class HoldService(
         if (!holdSlotRepository.TryFreeAutoAllocatedSlot(holdPoint))
             return;
 
-        windowManager.CloseWindow(WindowKeys.HoldFor(holdPoint));
+        windowManager.Close(WindowKeys.HoldFor(holdPoint));
         WeakReferenceMessenger.Default.Send(new HoldSlotsUpdatedCommand());
     }
 }

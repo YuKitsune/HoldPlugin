@@ -16,7 +16,7 @@ public class RadarTrackUpdatedHandler(
     {
         var updated = notification.RadarTrack;
 
-        workQueue.Enqueue(async () =>
+        workQueue.Enqueue(async _ =>
         {
             try
             {
