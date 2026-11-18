@@ -212,33 +212,74 @@ public static class HoldPatches
                 if (fdr is null || !TryGetHoldPointIndex(fdr, out var hold, out var holdPointIndex))
                     return true;
 
-                if (hold.HoldEntryTime is not null)
-                    return false;
+                var runOriginal = ShouldRunOriginal(rt, fdr, segment, hold, holdPointIndex);
+                if (!runOriginal)
+                    DepartIfNotDeparted(fdr, rt);
 
-                // vatSys found that the aircraft crossed a waypoint.
-                if (segment is not null)
-                {
-                    var segmentIndex = fdr.ParsedRoute.IndexOf(segment);
-                    if (segmentIndex == holdPointIndex)
-                    {
-                        _holds.Update(fdr.Callsign, h => h with { HoldEntryTime = h.HoldEntryTime ?? DateTime.UtcNow });
-
-                        // Calculate the ETOs again from the hold entry time.
-                        FDP2.Process(fdr);
-                        return false;
-                    }
-
-                    return CanSequenceTo(hold, holdPointIndex, segmentIndex);
-                }
-
-                // vatSys adds an APR segment before the route index that it finds.
-                return FindPositionReportIndex(rt, fdr) <= holdPointIndex;
+                return runOriginal;
             }
             catch (Exception ex)
             {
                 _errorReporter.ReportError(ex);
                 return true;
             }
+        }
+
+        static bool ShouldRunOriginal(
+            RDP.RadarTrack rt,
+            FDP2.FDR fdr,
+            FDP2.FDR.ExtractedRoute.Segment? segment,
+            HoldItem hold,
+            int holdPointIndex)
+        {
+            if (hold.HoldEntryTime is not null)
+                return false;
+
+            // vatSys found that the aircraft crossed a waypoint.
+            if (segment is not null)
+            {
+                var segmentIndex = fdr.ParsedRoute.IndexOf(segment);
+                if (segmentIndex == holdPointIndex)
+                {
+                    _holds.Update(fdr.Callsign, h => h with { HoldEntryTime = h.HoldEntryTime ?? DateTime.UtcNow });
+
+                    // Calculate the ETOs again from the hold entry time.
+                    FDP2.Process(fdr);
+                    return false;
+                }
+
+                return CanSequenceTo(hold, holdPointIndex, segmentIndex);
+            }
+
+            // vatSys adds an APR segment before the route index that it finds.
+            return FindPositionReportIndex(rt, fdr) <= holdPointIndex;
+        }
+
+        // vatSys marks a radar track as departed only in AutomaticPositionReport, from the last
+        // ATO. Until then the FDR stays coordinated, and a controller cannot accept it. When the
+        // patch skips the position report, do the same as vatSys. If the route has no ATO (e.g.
+        // the aircraft was already in the hold when it coupled), the aircraft departed before
+        // the radar position.
+        static void DepartIfNotDeparted(FDP2.FDR fdr, RDP.RadarTrack rt)
+        {
+            if (fdr.ATD != DateTime.MaxValue)
+                return;
+
+            var route = fdr.ParsedRoute.ToList();
+            var lastIndex = route.FindLastIndex(s => s.ATO != DateTime.MaxValue);
+            if (lastIndex != -1)
+            {
+                var eet = TimeSpan.Zero;
+                for (var i = 0; i <= lastIndex; i++)
+                    eet += route[i].EET;
+
+                FDP2.DepartFDR(fdr, route[lastIndex].ATO - eet);
+                return;
+            }
+
+            var firstSegment = route.FirstOrDefault();
+            var atd = firstSegment is not null && firstSegment.ETO < rt.Timestamp ? firstSegment.ETO : rt.Timestamp;
+            FDP2.DepartFDR(fdr, atd);
         }
 
         // Find the route index that vatSys adds the APR segment before, the same as vatSys does.
@@ -857,34 +898,49 @@ public static class HoldPatches
     }
 
     /// <summary>
-    ///     Do not show an STCA alert for an aircraft in a hold. For an aircraft in a hold,
-    ///     remove its STCA alerts and do not check for conflicts. The other aircraft also check
-    ///     for conflicts with it, thus <see cref="AddAlertPatch"/> stops these alerts.
+    ///     Do not show an STCA alert for an aircraft in a hold. Do not check for conflicts for an
+    ///     aircraft in a hold. The other aircraft also check for conflicts with it, thus
+    ///     <see cref="AddAlertPatch"/> stops new alerts. vatSys only checks an aircraft for STCA
+    ///     inside the STCA volumes and vertical bands, thus the check of the aircraft in the hold
+    ///     can stop while the check of the other aircraft continues. vatSys keeps an alert that
+    ///     already exists while the conflict continues, thus remove the STCA alerts with an
+    ///     aircraft in a hold after the check of every aircraft.
     /// </summary>
     [HarmonyPatch(typeof(RDP), "CheckForSTCA")]
     static class CheckForSTCAPatch
     {
         static readonly Type AlertsType = AccessTools.TypeByName("vatsys.Alerts");
+        static readonly Type AlertType = AccessTools.TypeByName("vatsys.Alert");
         static readonly FieldInfo InstanceField = AccessTools.Field(AlertsType, "Instance");
-        static readonly MethodInfo RemoveAlertsMethod = AccessTools.Method(AlertsType, "RemoveAlerts", [typeof(Track), typeof(AlertTypes)]);
+        static readonly MethodInfo GetAlertsMethod = AccessTools.Method(AlertsType, "GetAlerts", [typeof(Track), typeof(AlertTypes)]);
+        static readonly MethodInfo RemoveAlertMethod = AccessTools.Method(AlertsType, "RemoveAlert", [AlertType]);
+        static readonly PropertyInfo TrackProperty = AccessTools.Property(AlertType, "Track");
+        static readonly PropertyInfo Track2Property = AccessTools.Property(AlertType, "Track2");
 
-        static bool Prefix(RDP.RadarTrack rt)
+        static bool Prefix(RDP.RadarTrack rt) => !IsInHold(rt.CoupledFDR);
+
+        // Harmony runs the postfix also when the prefix skips the check.
+        static void Postfix(RDP.RadarTrack rt)
         {
             try
             {
-                if (!IsInHold(rt.CoupledFDR))
-                    return true;
-
                 var track = MMI.FindTrack(rt);
-                if (track is not null)
-                    RemoveAlertsMethod.Invoke(InstanceField.GetValue(null), [track, AlertTypes.STCA]);
+                if (track is null)
+                    return;
 
-                return false;
+                var alerts = InstanceField.GetValue(null);
+                var stcaAlerts = (IEnumerable)GetAlertsMethod.Invoke(alerts, [track, AlertTypes.STCA]);
+                foreach (var alert in stcaAlerts)
+                {
+                    var track1 = (Track?)TrackProperty.GetValue(alert);
+                    var track2 = (Track?)Track2Property.GetValue(alert);
+                    if (IsInHold(track1?.GetFDR()) || IsInHold(track2?.GetFDR()))
+                        RemoveAlertMethod.Invoke(alerts, [alert]);
+                }
             }
             catch (Exception ex)
             {
                 _errorReporter.ReportError(ex);
-                return true;
             }
         }
     }
