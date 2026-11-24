@@ -126,3 +126,39 @@ The plugin keeps the delays and the holds in the remarks of the flight plan:
 Make sure that you do not mix up the two formats. In `DLE/`, `HHMM` is a length of time. In `HLD/`, `HHMM` is a time of day.
 
 The remarks can have more than one delay, but only one hold. When you initiate a hold, the new `HLD/` replaces the old one.
+
+## Messages from other plugins
+
+Other plugins can send messages to the mailbox `dev.eoinmotherway.hold` to control the Hold plugin. The payload of each message is a JSON object.
+
+### Initiate a hold
+
+Message: `dev.eoinmotherway.hold.initiate-hold`
+
+```json
+{
+  "Callsign": "QFA1",
+  "WaypointName": "TARAL",
+  "ExitTime": "2026-11-24T12:45:00Z"
+}
+```
+
+- `Callsign`: The callsign of the aircraft.
+- `WaypointName`: The name of the waypoint in the flight plan route.
+- `ExitTime` (optional): The UTC exit time of the hold. If the payload does not have an exit time, the hold length is 10 minutes from the arrival time at the waypoint.
+
+A hold at a different waypoint moves to this waypoint. If the waypoint is not on the route, the plugin does nothing.
+
+### Terminate a hold
+
+Message: `dev.eoinmotherway.hold.terminate-hold`
+
+```json
+{
+  "Callsign": "QFA1"
+}
+```
+
+- `Callsign`: The callsign of the aircraft.
+
+If the aircraft does not hold, the plugin does nothing.
